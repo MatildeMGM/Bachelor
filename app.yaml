@@ -1,0 +1,6 @@
+name: EMS H2 Dashboard
+description: EMS dashboard for PV-battery-PEMRFC system on Arduino Q
+ports: []
+bricks:
+  - arduino:web_ui: {}
+icon: ⚡

@@ -12,3 +12,5 @@ def fetch_prices_for_today(zone="DK2"):
     data = response.json()
 
     return [float(item["DKK_per_kWh"]) for item in data]
+
+

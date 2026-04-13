@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Arduino
+*.ino.cpp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+wifi.json
+
+# ignore app cache folder
+.cache/

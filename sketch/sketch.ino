@@ -267,7 +267,7 @@ void UpdatePrices() {
       hour = hour + 1;
     }
   }
-}
+} 
 
 bool apply_price_frame(String payload) {
   if (!payload.startsWith("PRICE,")) {
