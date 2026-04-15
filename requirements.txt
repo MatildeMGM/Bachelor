@@ -1,0 +1,2 @@
+https://pypi.org/project/entsoe-py/
+pip install entsoe-py
