@@ -1,11 +1,16 @@
+# -*- coding: utf-8 -*-
+
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from arduino.app_utils import App, Bridge
 from arduino.app_bricks.web_ui import WebUI
 
 from prices import fetch_prices_for_today
+
+DK_TZ = ZoneInfo("Europe/Copenhagen")
 
 ui = WebUI()
 state_lock = threading.Lock()
@@ -15,7 +20,9 @@ runtime = {
     "price_zone": "DK2",
     "current_hour": 0,
     "current_minute": 0,
-    "current_slot": 0,          # 0..95
+    "current_slot": 0,
+    "current_time_label": "",
+    "current_interval_label": "",
     "current_price": 0.0,
     "price_source": "api.energidataservice.dk",
     "last_price_update": "",
@@ -28,19 +35,47 @@ runtime = {
 known_clients = set()
 
 
+def get_now():
+    return datetime.now(DK_TZ)
+
+
 def get_current_slot(now=None):
     if now is None:
-        now = datetime.now()
-
+        now = get_now()
     return now.hour * 4 + (now.minute // 15)
 
 
+def get_current_time_label(now=None):
+    if now is None:
+        now = get_now()
+    return "{:02d}:{:02d}".format(now.hour, now.minute)
+
+
+def get_current_interval_label(now=None):
+    if now is None:
+        now = get_now()
+
+    start_minute = (now.minute // 15) * 15
+    end_hour = now.hour
+    end_minute = start_minute + 15
+
+    if end_minute >= 60:
+        end_minute = 0
+        end_hour = (end_hour + 1) % 24
+
+    return "{:02d}:{:02d}-{:02d}:{:02d}".format(
+        now.hour, start_minute, end_hour, end_minute
+    )
+
+
 def update_current_time_and_price():
-    now = datetime.now()
+    now = get_now()
 
     runtime["current_hour"] = now.hour
     runtime["current_minute"] = now.minute
     runtime["current_slot"] = get_current_slot(now)
+    runtime["current_time_label"] = get_current_time_label(now)
+    runtime["current_interval_label"] = get_current_interval_label(now)
 
     if runtime["prices"] and len(runtime["prices"]) > runtime["current_slot"]:
         runtime["current_price"] = runtime["prices"][runtime["current_slot"]]
@@ -59,12 +94,12 @@ def refresh_prices():
 
         with state_lock:
             runtime["prices"] = prices
-            runtime["last_price_update"] = datetime.now().isoformat(timespec="seconds")
+            runtime["last_price_update"] = get_now().isoformat(timespec="seconds")
             runtime["last_error"] = ""
             update_current_time_and_price()
 
-        print("CURRENT HOUR:", runtime["current_hour"])
-        print("CURRENT MINUTE:", runtime["current_minute"])
+        print("CURRENT TIME:", runtime["current_time_label"])
+        print("CURRENT INTERVAL:", runtime["current_interval_label"])
         print("CURRENT SLOT:", runtime["current_slot"])
         print("CURRENT PRICE:", runtime["current_price"])
         print("===================")
@@ -80,8 +115,8 @@ def push_price_to_mcu():
         slot=runtime["current_slot"],
     )
 
-    now = datetime.now().strftime("%H:%M:%S")
-    print("[{}] SENDING PRICE TO MCU: {}".format(now, payload))
+    now_str = get_now().strftime("%H:%M:%S")
+    print("[{}] SENDING PRICE TO MCU: {}".format(now_str, payload))
 
     Bridge.call("apply_price_frame", payload, timeout=2)
 
@@ -140,6 +175,8 @@ def build_payload():
         "current_hour": runtime["current_hour"],
         "current_minute": runtime["current_minute"],
         "current_slot": runtime["current_slot"],
+        "current_time_label": runtime["current_time_label"],
+        "current_interval_label": runtime["current_interval_label"],
         "current_price": runtime["current_price"],
         "arduino_status": runtime["arduino_status"],
     }
@@ -173,7 +210,7 @@ def price_loop():
 
     while True:
         try:
-            today = datetime.now().date()
+            today = get_now().date()
 
             if last_refresh_date != today or not runtime["prices"]:
                 refresh_prices()

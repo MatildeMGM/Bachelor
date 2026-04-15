@@ -29,7 +29,7 @@ const int zInput = A0;                  // Common (Z) to A0
 // Electricity price time management
 unsigned long previousMillis = 0;
 const long period = 20000;   // kept from original logic
-int hour = 0;
+int priceSlot = 0;           // 0..95 for 15-minute resolution
 float electricityprice = 0.0;
 bool priceReceived = false;
 
@@ -53,7 +53,7 @@ float pemrfcVoltage = 0.0;
 float batteryVoltage = 0.0;
 float batterySOC = 0.0;
 
-//Printing time
+// Printing time
 unsigned long lastPrint = 0;
 const long printInterval = 2000; // 2 seconds
 
@@ -101,7 +101,6 @@ void setup() {
   delay(1000);
   Monitor.println("EMS sketch started");
 
-
   Bridge.begin();
   Bridge.provide("apply_price_frame", apply_price_frame);
   Bridge.provide("get_status", get_status);
@@ -137,11 +136,10 @@ void setup() {
 }
 
 void loop() {
-
   Monitor.println("loop alive");
   delay(1000);
 
-  UpdatePrices();   // kept for time progression if needed
+  UpdatePrices();   // kept for compatibility
   GetVoltage();
   GetCurrent();
   GetPower();
@@ -153,11 +151,11 @@ void loop() {
 
   if (electricityprice >= 0.6) {
     HighPriceScheme();
-  } else if (electricityprice < 0.6) {
+  } else {
     LowPriceScheme();
   }
 
-  delay(400); //2.5 times pr minute 
+  delay(400); // 2.5 times pr minute
 
   // PEM charging time handling
   if (digitalRead(K4) == HIGH) {
@@ -171,7 +169,7 @@ void loop() {
 // -----------------------------------------------------------------------------
 
 bool apply_price_frame(String payload) {
-  // Expected format: PRICE,<price>,<hour>
+  // Expected format: PRICE,<price>,<slot>
   if (!payload.startsWith("PRICE,")) {
     return false;
   }
@@ -184,11 +182,11 @@ bool apply_price_frame(String payload) {
   }
 
   electricityprice = payload.substring(firstComma + 1, secondComma).toFloat();
-  hour = payload.substring(secondComma + 1).toInt();
+  priceSlot = payload.substring(secondComma + 1).toInt();
   priceReceived = true;
 
-  Monitor.print("Received price from main.py -> hour: ");
-  Monitor.print(hour);
+  Monitor.print("Received price from main.py -> slot: ");
+  Monitor.print(priceSlot);
   Monitor.print(", price: ");
   Monitor.println(electricityprice, 5);
 
@@ -198,7 +196,7 @@ bool apply_price_frame(String payload) {
 String get_status() {
   String payload = "";
 
-  payload += "hour=" + String(hour);
+  payload += "slot=" + String(priceSlot);
   payload += ",price=" + String(electricityprice, 5);
 
   payload += ",panelVoltage=" + String(panelVoltage, 5);
@@ -333,7 +331,7 @@ void GetPower() {
 }
 
 void UpdatePrices() {
-  // Price and hour are provided by main.py through Bridge
+  // Price and slot are provided by main.py through Bridge
 }
 
 void selectMuxPin(byte pin) {
@@ -377,14 +375,14 @@ void PrintValues() {
   Monitor.println(PEMpower);
   Monitor.print(" Electricity price: ");
   Monitor.println(electricityprice, 5);
-  Monitor.print(" Hour: ");
-  Monitor.println(hour);
+  Monitor.print(" Price slot: ");
+  Monitor.println(priceSlot);
   Monitor.print(" Mode: ");
   Monitor.println(mode);
 }
 
 void CSVPrintValues() {
-  Monitor.print(hour);
+  Monitor.print(priceSlot);
   Monitor.print(",");
   Monitor.print(electricityprice);
   Monitor.print(",");
