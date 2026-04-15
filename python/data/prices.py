@@ -1,21 +1,22 @@
+# This file contains the function that fetches and cleans day ahead price data.
+
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+
 import requests
 
-DK_TZ = ZoneInfo("Europe/Copenhagen")
-BASE_URL = "https://api.energidataservice.dk/dataset/DayAheadPrices"
+from config import BASE_URL, DK_TZ, PRICE_REQUEST_TIMEOUT, VALID_PRICE_ZONES
 
 
 def fetch_prices_for_today(zone="DK2"):
     zone = str(zone).upper()
-    if zone not in ("DK1", "DK2"):
+    if zone not in VALID_PRICE_ZONES:
         raise ValueError("zone must be 'DK1' or 'DK2'")
 
     now_dk = datetime.now(DK_TZ)
     today_dk = now_dk.date()
     tomorrow_dk = today_dk + timedelta(days=1)
 
-    # Fetch a wider window to stay robust around UTC/DK date boundaries
+    # Fetch a wider window to stay robust around UTC and DK date boundaries
     start_date = today_dk - timedelta(days=1)
     end_date = tomorrow_dk + timedelta(days=1)
 
@@ -26,7 +27,7 @@ def fetch_prices_for_today(zone="DK2"):
         "sort": "TimeUTC",
     }
 
-    response = requests.get(BASE_URL, params=params, timeout=15)
+    response = requests.get(BASE_URL, params=params, timeout=PRICE_REQUEST_TIMEOUT)
     response.raise_for_status()
 
     payload = response.json()
@@ -45,7 +46,6 @@ def fetch_prices_for_today(zone="DK2"):
             continue
 
         try:
-            # Format: "2026-04-15T23:45:00"
             time_dk = datetime.fromisoformat(time_dk_raw)
             price_dkk_kwh = float(price_dkk_mwh) / 1000.0
         except (ValueError, TypeError):
@@ -62,7 +62,5 @@ def fetch_prices_for_today(zone="DK2"):
         raise RuntimeError(
             "No price records found for {} on {}.".format(zone, today_dk.isoformat())
         )
-
-
 
     return prices

@@ -1,11 +1,25 @@
+# This file contains the shared EMS state object used across the Python app.
+
+import threading
+
+from config import DEFAULT_PRICE_ZONE, PRICE_SOURCE
+
+
 class EMSState:
     def __init__(self):
-        # Prices
+        # Prices and time
         self.prices = []
+        self.price_zone = DEFAULT_PRICE_ZONE
         self.current_price = 0.0
         self.current_hour = 0
+        self.current_minute = 0
+        self.current_slot = 0
+        self.current_time_label = ""
+        self.current_interval_label = ""
+        self.price_source = PRICE_SOURCE
+        self.last_price_update = ""
 
-        # Electrical values
+        # Electrical measurements
         self.panel_voltage = 0.0
         self.battery_voltage = 0.0
         self.load_voltage = 0.0
@@ -27,6 +41,13 @@ class EMSState:
         self.mode = ""
         self.scenario = 0
 
-        # Status
+        # App status
         self.bridge_ok = None
         self.last_error = ""
+        self.clients = 0
+        self.arduino_status = {}
+
+
+state = EMSState()
+state_lock = threading.Lock()
+known_clients = set()
