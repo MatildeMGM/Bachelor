@@ -1,2 +1,2 @@
-https://pypi.org/project/entsoe-py/
-pip install entsoe-py
+#Plots hardware tests - voltage sensors
+pip install openpyxl
