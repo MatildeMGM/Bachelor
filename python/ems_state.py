@@ -19,6 +19,11 @@ class EMSState:
         self.price_source = PRICE_SOURCE
         self.last_price_update = ""
 
+        # PV forecast
+        self.pv_forecast = []
+        self.current_pv_forecast = 0.0
+        self.last_pv_update = ""
+
         # Electrical measurements
         self.panel_voltage = 0.0
         self.battery_voltage = 0.0

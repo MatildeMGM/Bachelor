@@ -4,11 +4,11 @@ import threading
 
 from arduino.app_utils import App
 
-from ui import price_loop, setup_ui
+from ui import forecast_loop, setup_ui
 
 setup_ui()
 
-threading.Thread(target=price_loop, daemon=True).start()
+threading.Thread(target=forecast_loop, daemon=True).start()
 
 print("Starting EMS App...")
 

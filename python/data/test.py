@@ -2,27 +2,22 @@ from data.weather import fetch_weather_forecast_for_today
 
 
 RATED_POWER_W = 1.0
-
-# Replace this placeholder value once the laboratory correction factor
-# has been determined from measurements of the PV panel under the
-# relevant test conditions.
-PV_CORRECTION_FACTOR = 1.0
+PV_CORRECTION_FACTOR = 0.85
 
 
 def interpolate_hourly_to_quarter_hour(hourly_values):
-    if len(hourly_values) < 2:
-        raise ValueError("Not enough PV values for interpolation.")
+    if len(hourly_values) < 24:
+        raise ValueError("Expected at least 24 hourly PV values.")
 
     quarter_hour_values = []
-    n = len(hourly_values)
 
-    for i in range(n):
+    for i in range(24):
         start_value = hourly_values[i]
 
-        if i < n - 1:
+        if i < 23:
             end_value = hourly_values[i + 1]
         else:
-            end_value = start_value
+            end_value = hourly_values[i]
 
         quarter_hour_values.append(start_value)
         quarter_hour_values.append(start_value + (end_value - start_value) * 0.25)

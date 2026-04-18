@@ -8,6 +8,7 @@ from arduino.app_bricks.web_ui import WebUI
 from bridge import fetch_arduino_status, push_price_to_mcu
 from config import DEFAULT_PRICE_ZONE, DK_TZ, LOOP_SLEEP_SECONDS, VALID_PRICE_ZONES
 from data.prices import fetch_prices_for_today
+from data.pv import fetch_pv_forecast_for_today
 from ems_state import known_clients, state, state_lock
 
 ui = WebUI()
@@ -46,7 +47,7 @@ def get_current_interval_label(now=None):
     )
 
 
-def update_current_time_and_price():
+def update_current_time_price_and_pv():
     now = get_now()
 
     state.current_hour = now.hour
@@ -60,6 +61,11 @@ def update_current_time_and_price():
     else:
         state.current_price = 0.0
 
+    if state.pv_forecast and len(state.pv_forecast) > state.current_slot:
+        state.current_pv_forecast = state.pv_forecast[state.current_slot]
+    else:
+        state.current_pv_forecast = 0.0
+
 
 def build_payload():
     return {
@@ -70,14 +76,17 @@ def build_payload():
             "price_zone": state.price_zone,
             "price_source": state.price_source,
             "last_price_update": state.last_price_update,
+            "last_pv_update": state.last_pv_update,
         },
         "prices": state.prices,
+        "pv_forecast": state.pv_forecast,
         "current_hour": state.current_hour,
         "current_minute": state.current_minute,
         "current_slot": state.current_slot,
         "current_time_label": state.current_time_label,
         "current_interval_label": state.current_interval_label,
         "current_price": state.current_price,
+        "current_pv_forecast": state.current_pv_forecast,
         "arduino_status": state.arduino_status,
     }
 
@@ -99,7 +108,7 @@ def refresh_prices():
             state.prices = prices
             state.last_price_update = get_now().isoformat(timespec="seconds")
             state.last_error = ""
-            update_current_time_and_price()
+            update_current_time_price_and_pv()
 
         print("CURRENT TIME:", state.current_time_label)
         print("CURRENT INTERVAL:", state.current_interval_label)
@@ -112,9 +121,36 @@ def refresh_prices():
         print(state.last_error)
 
 
+def refresh_pv_forecast():
+    try:
+        pv_forecast = fetch_pv_forecast_for_today()
+
+        print("=== PV FORECAST FETCH ===")
+        print("NUMBER OF PV VALUES:", len(pv_forecast))
+        print("FIRST 8 PV VALUES:", pv_forecast[:8])
+
+        with state_lock:
+            state.pv_forecast = pv_forecast
+            state.last_pv_update = get_now().isoformat(timespec="seconds")
+            state.last_error = ""
+            update_current_time_price_and_pv()
+
+        print("CURRENT PV FORECAST:", state.current_pv_forecast)
+        print("=========================")
+
+    except Exception as e:
+        state.last_error = f"PV forecast fetch failed: {e}"
+        print(state.last_error)
+
+
+def refresh_forecasts():
+    refresh_prices()
+    refresh_pv_forecast()
+
+
 def publish_state(push_bridge=True):
     with state_lock:
-        update_current_time_and_price()
+        update_current_time_price_and_pv()
 
         if push_bridge:
             try:
@@ -131,15 +167,15 @@ def publish_state(push_bridge=True):
     ui.send_message("telemetry", payload)
 
 
-def price_loop():
+def forecast_loop():
     last_refresh_date = None
 
     while True:
         try:
             today = get_now().date()
 
-            if last_refresh_date != today or not state.prices:
-                refresh_prices()
+            if last_refresh_date != today or not state.prices or not state.pv_forecast:
+                refresh_forecasts()
                 last_refresh_date = today
 
             publish_state(push_bridge=True)
@@ -167,7 +203,7 @@ def on_price_control(client_id, data):
     action = (data or {}).get("action", "")
 
     if action == "refresh":
-        refresh_prices()
+        refresh_forecasts()
         publish_state(push_bridge=True)
 
     elif action == "set_zone":
