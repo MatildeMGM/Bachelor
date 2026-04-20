@@ -1,2 +1,11 @@
 #Plots hardware tests - voltage sensors
 pip install openpyxl
+
+
+pvlib
+pandas
+numpy
+openmeteo-requests
+retry-requests
+requests-cache
+opcua

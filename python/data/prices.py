@@ -62,5 +62,10 @@ def fetch_prices_for_today(zone="DK2"):
         raise RuntimeError(
             "No price records found for {} on {}.".format(zone, today_dk.isoformat())
         )
+    
+    if len(prices) != 96:
+        raise RuntimeError(
+            f"Expected 96 price values for {zone} on {today_dk.isoformat()}, got {len(prices)}"
+        )
 
     return prices
