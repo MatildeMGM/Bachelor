@@ -270,31 +270,18 @@ class OpenMeteoClient:
             responses = self.client.weather_api(url=self.FORECAST_API, params=params)
         elif api == "archive":
             responses = self.client.weather_api(url=self.ARCHIVE_API, params=params)
-        else:
-            raise ValueError(f"Invalid api: {api}")
-
         response = responses[0]
         hourly = response.Hourly()
-
-        start_time = pd.to_datetime(hourly.Time(), unit="s", utc=True).tz_convert(
-            Constants.TIME_ZONE_NAME
-        )
-        interval = pd.Timedelta(seconds=hourly.Interval())
-        n = len(hourly.Variables(0).ValuesAsNumpy())
-
-
-        #  Modified from original to ensure that data is returned only for the requested period (tStart to tEnd) and that the index is properly named and timezone-aware.
-        #  Also added error handling for NaN values in the retrieved data.
         data = pd.DataFrame(
             index=pd.date_range(
-                start=start_time,
-                periods=n,
-                freq=interval,
+                start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+                end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+                freq=pd.Timedelta(seconds=hourly.Interval()),
+                inclusive="left",
             )
         )
-        data.index = data.index.round("1h")
         data.index.rename(self.INDEX_NAME, inplace=True)
-
+        data.index = data.index.tz_convert(Constants.TIME_ZONE_NAME)
         for idx, var in enumerate(self.VARIABLES):
             data[var] = hourly.Variables(idx).ValuesAsNumpy()
         data.dropna(axis=0, how="all", inplace=True)
@@ -311,7 +298,7 @@ class OpenMeteoClient:
             return data
         else:
             raise ValueError(
-                f"data unavailable for the period between '{tStart.strftime(Constants.DAY_FORMAT)}' and '{tEnd.strftime(Constants.DAY_FORMAT)}'."
+                f"data unavailable for the period between '{tStart.strftime(Constants.DAY_FORMAT)} and {tEnd.strftime(Constants.DAY_FORMAT)}'."
             )
 
 

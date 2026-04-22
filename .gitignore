@@ -1,6 +1,9 @@
 # Python
+venv/
+.venv/
 __pycache__/
 *.pyc
+*.sqlite
 
 # Arduino
 *.ino.cpp
@@ -13,5 +16,5 @@ Thumbs.db
 .env
 wifi.json
 
-# ignore app cache folder
+# Cache
 .cache/
