@@ -1,11 +1,29 @@
-#Plots hardware tests - voltage sensors
-pip install openpyxl
-
-#Packages for pv model
-pvlib
+# Data handling
 pandas
 numpy
-openmeteo-requests
-retry-requests
+
+# API requests
+requests
 requests-cache
+retry-requests
+
+# Machine learning
+scikit-learn
+tensorflow
+cvxpy 
+
+# PV model
+pvlib
+openmeteo-requests
+
+# OPC communication
 opcua
+
+# Excel support
+openpyxl
+
+# Plotting (used in notebook)
+matplotlib
+
+
+#when all works: pip freeze > requirements.txt
