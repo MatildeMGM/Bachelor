@@ -1,9 +1,0 @@
-price=0.80
-pv=0.00
-bat=2.40
-pem=0.90
-load=0.30
-bati=0.00
-pemi=0.20
-pvi=0.00
-loadi=0.10
