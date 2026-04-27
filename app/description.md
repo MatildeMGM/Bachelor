@@ -12,11 +12,11 @@ The user interface is placed in the `assets` folder. This part is what the user 
 
 2. The Python layer
 
-The Python layer is placed in the `python` folder. This is the main control part of the app. It collects data, stores the current state of the system, communicates with the Arduino, and sends information to the user interface.
+The Python layer is placed in the `python` folder. This is the main control part of the app. It collects data, stores the current state of the system, communicates within the Arduino, and sends information to the user interface.
 
 3. The Arduino layer
 
-The Arduino layer is placed in the `sketch` folder. This part runs on the Arduino and interacts with the physical setup. It reads measurements, controls relays, and sends status information back to Python.
+The Arduino layer is placed in the `sketch` folder. This part interacts with the physical setup. It reads measurements, controls relays, and sends status information back to Python.
 
 ## Folder descriptions
 
