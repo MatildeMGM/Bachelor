@@ -4,7 +4,7 @@ import threading
 
 from arduino.app_utils import App
 
-from ui import forecast_loop, setup_ui
+from app.python.ui import forecast_loop, setup_ui
 
 setup_ui()
 

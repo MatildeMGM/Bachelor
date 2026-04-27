@@ -2,7 +2,7 @@
 
 import threading
 
-from config import DEFAULT_PRICE_ZONE, PRICE_SOURCE
+from app.python.config import DEFAULT_PRICE_ZONE, PRICE_SOURCE
 
 
 class EMSState:

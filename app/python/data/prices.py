@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import requests
 
-from config import BASE_URL, DK_TZ, PRICE_REQUEST_TIMEOUT, VALID_PRICE_ZONES
+from app.python.config import BASE_URL, DK_TZ, PRICE_REQUEST_TIMEOUT, VALID_PRICE_ZONES
 
 
 def fetch_prices_for_today(zone="DK2"):

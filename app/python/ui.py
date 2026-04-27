@@ -5,11 +5,11 @@ from datetime import datetime
 
 from arduino.app_bricks.web_ui import WebUI
 
-from bridge import fetch_arduino_status, push_price_to_mcu
-from config import DEFAULT_PRICE_ZONE, DK_TZ, LOOP_SLEEP_SECONDS, VALID_PRICE_ZONES
-from data.prices import fetch_prices_for_today
-from data.pv import fetch_pv_forecast_for_today
-from ems_state import known_clients, state, state_lock
+from app.python.bridge import fetch_arduino_status, push_price_to_mcu
+from app.python.config import DEFAULT_PRICE_ZONE, DK_TZ, LOOP_SLEEP_SECONDS, VALID_PRICE_ZONES
+from app.python.data.prices import fetch_prices_for_today
+from app.python.data.pv import fetch_pv_forecast_for_today
+from app.python.ems_state import known_clients, state, state_lock
 
 ui = WebUI()
 

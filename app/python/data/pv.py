@@ -1,4 +1,4 @@
-from data.weather import fetch_weather_forecast_for_today
+from app.python.data.weather import fetch_weather_forecast_for_today
 
 
 RATED_POWER_W = 1.0

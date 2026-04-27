@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import requests
 
-from config import DK_TZ, LATITUDE, LONGITUDE
+from app.python.config import DK_TZ, LATITUDE, LONGITUDE
 
 REQUEST_TIMEOUT = 10
 
