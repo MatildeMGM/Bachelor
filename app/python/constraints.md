@@ -100,11 +100,32 @@ full: 90 to 100 percent (above approx. 3.9 V)
 - Switching elements (relay/MOSFET states)  
 - Safe switching delay  
 
-## Scheduler Input
-- 24-hour electricity price profile  
-- 96-slot demand profile  
-- PV availability or measured PV state  
-- Initial battery state  
-- Initial PEM state  
-- Test duration (e.g. 12 minutes)  
-- Slot duration (e.g. 7.5 seconds)  
+
+
+# Sketch ino: 
+read INA226 sensors
+control relays or MOSFETs
+receive simple commands from Python
+execute selected scenario
+apply emergency safety checks
+send measurements back to Python
+
+
+# controller.py
+read live measurements from Arduino
+read price and demand profiles
+read battery and PEM state tables
+estimate battery SOC
+estimate PEM state
+choose best operating mode
+send selected mode to Arduino
+log system behaviour
+
+# main.py
+load configuration
+start serial connection
+start the 12 minute simulated day
+step through 96 time slots
+call controller.py each step
+save final logs
+create experiment output folder
