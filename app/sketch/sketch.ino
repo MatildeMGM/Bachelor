@@ -1,14 +1,27 @@
 #include <Arduino_RouterBridge.h>
+#include <Wire.h>
+#include <INA226_WE.h>
 
-// Pin definitions
-const int K1 = 8;   // Relay1
-const int K2 = 2;   // Relay2
-const int K3 = 3;   // Relay3
-const int K4 = 4;   // Relay4
-const int K5 = 5;   // Relay5
-const int K6 = 7;   // Relay6
-const int K7 = 9;   // Relay7
+#define ADDR_BAT  0x40
+#define ADDR_LOAD 0x41
+#define ADDR_PV   0x44
+#define ADDR_PEM  0x45
 
+INA226_WE inaBat(&Wire, ADDR_BAT);
+INA226_WE inaLoad(&Wire, ADDR_LOAD);
+INA226_WE inaPV(&Wire, ADDR_PV);
+INA226_WE inaPEM(&Wire, ADDR_PEM);
+
+// Relay pins
+const int K1 = 8;
+const int K2 = 2;
+const int K3 = 3;
+const int K4 = 4;
+const int K5 = 5;
+const int K6 = 7;
+const int K7 = 9;
+
+// LED signal pins
 const int LEDS1 = 21;
 const int LEDS2 = 0;
 const int LEDS3 = 20;
@@ -16,61 +29,59 @@ const int LEDS4 = 6;
 const int LEDS5 = 1;
 const int LEDS6 = 13;
 
-// Analog voltage pins
-const int batteryVoltagePin = A4;
-const int panelVoltagePin   = A2;
-const int pemrfcVoltagePin  = A5;
-const int loadVoltagePin    = A1;
-
-// Multiplexer pin definition
-const int selectPins[3] = {10, 11, 12}; // S0, S1, S2
-const int zInput = A0;                  // Common (Z) to A0
-
-// Electricity price time management
+// Price variables
 unsigned long previousMillis = 0;
-const long period = 20000;   // kept from original logic
-int priceSlot = 0;           // 0..95 for 15-minute resolution
+const long period = 20000;
+int priceSlot = 0;
 float electricityprice = 0.0;
 bool priceReceived = false;
 
-// PEMRFC time management
+// PEMRFC time variables
 const long period2 = 60000;
 unsigned long starttime = 0;
 bool PEM_flag = false;
 
-// Voltage divider coefficients
-const float batteryVoltageDivider = 1.5557;
-const float panelVoltageDivider   = 1.5557;
-const float pemrfcVoltageDivider  = 1.5557;
-const float loadVoltageDivider    = 1.55416;
-const float nominalVoltageDivider = 1.45829;
+// Battery limits from test
+const float BATTERY_MIN_VOLTAGE = 3.0;
+const float BATTERY_MAX_VOLTAGE = 4.2;
+const float BATTERY_EMPTY_TEST_VOLTAGE = 3.0;
+const float BATTERY_FULL_TEST_VOLTAGE = 3.97;
+const float BATTERY_USABLE_ENERGY_WH = 6.33;
+const float BATTERY_MAX_CHARGE_CURRENT_A = 1.0;
+const float BATTERY_MAX_DISCHARGE_CURRENT_A = 0.16;
+const float BATTERY_LOW_SOC = 10.0;
+const float BATTERY_FULL_SOC = 90.0;
 
-// Global variables for sensor data
+// Measured values
 float nominalVoltage = 0.0;
 float panelVoltage = 0.0;
 float loadVoltage = 0.0;
 float pemrfcVoltage = 0.0;
 float batteryVoltage = 0.0;
-float batterySOC = 0.0;
 
-// Printing time
-unsigned long lastPrint = 0;
-const long printInterval = 2000; // 2 seconds
-
-unsigned int x = 0;
-float SensorValuePV   = 0.0, SamplesPV   = 0.0, AvgAcsPV   = 0.0, PVcurrent   = 0.0;
-float SensorValueLoad = 0.0, SamplesLoad = 0.0, AvgAcsLoad = 0.0, Loadcurrent = 0.0;
-float SensorValuePEM  = 0.0, SamplesPEM  = 0.0, AvgAcsPEM  = 0.0, PEMcurrent  = 0.0;
-float SensorValueBat  = 0.0, SamplesBat  = 0.0, AvgAcsBat  = 0.0, Batcurrent  = 0.0;
+float PVcurrent = 0.0;
+float Loadcurrent = 0.0;
+float PEMcurrent = 0.0;
+float Batcurrent = 0.0;
 
 float PVpower = 0.0;
 float Loadpower = 0.0;
 float PEMpower = 0.0;
 float Batterypower = 0.0;
 
+// Battery SOC variables
+float batterySOC = 0.0;
+float batteryEnergyWh = 0.0;
+unsigned long lastBatterySOCUpdate = 0;
+String batteryChargeState = "";
+
+// Printing variables
+unsigned long lastPrint = 0;
+const long printInterval = 2000;
+
 String mode = "";
 
-// Battery and PEM gets status charged when running script
+// Initial status
 bool pemCharged = true;
 bool batCharged = true;
 
@@ -88,10 +99,14 @@ void LowPriceScheme();
 void GetVoltage();
 void GetCurrent();
 void GetPower();
+void UpdateBatterySOC();
 void UpdatePrices();
 void PrintValues();
 void CSVPrintValues();
-void selectMuxPin(byte pin);
+
+void setupINA(INA226_WE &sensor, const char* name);
+float EstimateBatterySOCFromVoltage(float voltage);
+String GetBatteryChargeState(float soc);
 
 bool apply_price_frame(String payload);
 String get_status();
@@ -105,7 +120,14 @@ void setup() {
   Bridge.provide("apply_price_frame", apply_price_frame);
   Bridge.provide("get_status", get_status);
 
-  // Initialize pin modes
+  Wire.begin();
+  delay(500);
+
+  setupINA(inaBat, "INA226 Battery");
+  setupINA(inaLoad, "INA226 Load");
+  setupINA(inaPV, "INA226 PV");
+  setupINA(inaPEM, "INA226 PEMRFC");
+
   pinMode(K1, OUTPUT);
   pinMode(K2, OUTPUT);
   pinMode(K3, OUTPUT);
@@ -121,17 +143,6 @@ void setup() {
   pinMode(LEDS5, OUTPUT);
   pinMode(LEDS6, OUTPUT);
 
-  pinMode(batteryVoltagePin, INPUT);
-  pinMode(pemrfcVoltagePin, INPUT);
-  pinMode(loadVoltagePin, INPUT);
-  pinMode(panelVoltagePin, INPUT);
-
-  pinMode(selectPins[0], OUTPUT);
-  pinMode(selectPins[1], OUTPUT);
-  pinMode(selectPins[2], OUTPUT);
-  pinMode(zInput, INPUT);
-
-  // Begin in scenario 1
   Scenario1();
 }
 
@@ -139,37 +150,56 @@ void loop() {
   Monitor.println("loop alive");
   delay(1000);
 
-  UpdatePrices();   // kept for compatibility
+  UpdatePrices();
+
+  // Read sensors and calculate power
   GetVoltage();
   GetCurrent();
   GetPower();
-  
+
+  // Estimate battery state
+  UpdateBatterySOC();
+
   if (millis() - lastPrint >= printInterval) {
     lastPrint = millis();
     PrintValues();
   }
 
+  // Select price scheme
   if (electricityprice >= 0.6) {
     HighPriceScheme();
   } else {
     LowPriceScheme();
   }
 
-  delay(400); // 2.5 times pr minute
+  delay(400);
 
-  // PEM charging time handling
+  // Reset PEM charging timer when PEM is not charging
   if (digitalRead(K4) == HIGH) {
     starttime = 0;
     PEM_flag = false;
   }
 }
 
-// -----------------------------------------------------------------------------
-// Bridge functions
-// -----------------------------------------------------------------------------
+void setupINA(INA226_WE &sensor, const char* name) {
+  Monitor.print("Initializing ");
+  Monitor.print(name);
+  Monitor.print(" ... ");
+
+  if (!sensor.init()) {
+    Monitor.println("FAILED");
+    return;
+  }
+
+  sensor.setAverage(INA226_AVERAGE_16);
+  sensor.setConversionTime(INA226_CONV_TIME_1100);
+  sensor.setMeasureMode(INA226_CONTINUOUS);
+  sensor.waitUntilConversionCompleted();
+
+  Monitor.println("OK");
+}
 
 bool apply_price_frame(String payload) {
-  // Expected format: PRICE,<price>,<slot>
   if (!payload.startsWith("PRICE,")) {
     return false;
   }
@@ -185,7 +215,7 @@ bool apply_price_frame(String payload) {
   priceSlot = payload.substring(secondComma + 1).toInt();
   priceReceived = true;
 
-  Monitor.print("Received price from main.py -> slot: ");
+  Monitor.print("Received price from main.py, slot: ");
   Monitor.print(priceSlot);
   Monitor.print(", price: ");
   Monitor.println(electricityprice, 5);
@@ -214,20 +244,21 @@ String get_status() {
   payload += ",PEMpower=" + String(PEMpower, 5);
   payload += ",Loadpower=" + String(Loadpower, 5);
 
+  payload += ",batterySOC=" + String(batterySOC, 2);
+  payload += ",batteryEnergyWh=" + String(batteryEnergyWh, 4);
+  payload += ",batteryChargeState=" + batteryChargeState;
+
   payload += ",mode=" + mode;
   payload += ",priceReceived=" + String(priceReceived ? 1 : 0);
 
   return payload;
 }
 
-// -----------------------------------------------------------------------------
-// EMS logic
-// -----------------------------------------------------------------------------
-
 void HighPriceScheme() {
+  // High price: prefer PV, then battery, then PEM, then grid
   if ((digitalRead(K1) == LOW && digitalRead(K2) == HIGH && digitalRead(K7) == LOW && loadVoltage > 0.15) || panelVoltage > 2.0) {
     Scenario4();
-  } else if (batCharged && batteryVoltage > 2.6) {
+  } else if (batCharged && batteryVoltage > BATTERY_MIN_VOLTAGE && batterySOC > BATTERY_LOW_SOC) {
     Scenario5();
   } else if ((digitalRead(K1) == LOW && digitalRead(K6) == LOW && loadVoltage > 0.2) || (pemCharged && pemrfcVoltage > 0.5)) {
     Scenario6();
@@ -240,22 +271,36 @@ void HighPriceScheme() {
 }
 
 void LowPriceScheme() {
+  // Low price: use grid for load and charge storage from PV
   if (panelVoltage > 2.0 || PEM_flag == true) {
-    if (((digitalRead(K3) == LOW && digitalRead(K5) == HIGH && batteryVoltage < 3.805 && Batcurrent >= -0.1 && PEM_flag == false)) ||
-        ((Batcurrent >= -0.1 && batteryVoltage <= 3.66 && PEM_flag == false))) {
+    if (((digitalRead(K3) == LOW && digitalRead(K5) == HIGH &&
+          batteryVoltage < BATTERY_MAX_VOLTAGE &&
+          batterySOC < BATTERY_FULL_SOC &&
+          Batcurrent < BATTERY_MAX_CHARGE_CURRENT_A &&
+          PEM_flag == false)) ||
+        ((batteryVoltage < BATTERY_MAX_VOLTAGE &&
+          batterySOC < BATTERY_FULL_SOC &&
+          Batcurrent < BATTERY_MAX_CHARGE_CURRENT_A &&
+          PEM_flag == false))) {
+
       Scenario2();
-      if (batteryVoltage > 2.75) {
+
+      if (batterySOC >= BATTERY_FULL_SOC || batteryVoltage >= BATTERY_FULL_TEST_VOLTAGE) {
         batCharged = true;
       }
+
     } else if (PEMcurrent >= -0.1) {
       Scenario3();
       PEM_flag = true;
+
       if (pemCharged == false && starttime == 0) {
         starttime = millis();
       }
+
       if (millis() - starttime >= period2) {
         pemCharged = true;
       }
+
     } else {
       Scenario1();
     }
@@ -264,63 +309,20 @@ void LowPriceScheme() {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Measurements
-// -----------------------------------------------------------------------------
-
 void GetVoltage() {
-  selectMuxPin(2);
+  nominalVoltage = 5.0;
 
-  nominalVoltage = (analogRead(zInput) / 1023.0) * 5 * nominalVoltageDivider;
-  loadVoltage    = (analogRead(loadVoltagePin) / 1023.0) * 5 * loadVoltageDivider;
-  panelVoltage   = (analogRead(panelVoltagePin) / 1023.0) * 5 * panelVoltageDivider;
-  pemrfcVoltage  = (analogRead(pemrfcVoltagePin) / 1023.0) * 5 * pemrfcVoltageDivider;
-  batteryVoltage = (analogRead(batteryVoltagePin) / 1023.0) * 5 * batteryVoltageDivider;
+  batteryVoltage = inaBat.getBusVoltage_V();
+  loadVoltage    = inaLoad.getBusVoltage_V();
+  panelVoltage   = inaPV.getBusVoltage_V();
+  pemrfcVoltage  = inaPEM.getBusVoltage_V();
 }
 
 void GetCurrent() {
-  x = 0;
-  SensorValuePV = 0.0;   SamplesPV = 0.0;   AvgAcsPV = 0.0;   PVcurrent = 0.0;
-  SensorValueLoad = 0.0; SamplesLoad = 0.0; AvgAcsLoad = 0.0; Loadcurrent = 0.0;
-  SensorValuePEM = 0.0;  SamplesPEM = 0.0;  AvgAcsPEM = 0.0;  PEMcurrent = 0.0;
-  SensorValueBat = 0.0;  SamplesBat = 0.0;  AvgAcsBat = 0.0;  Batcurrent = 0.0;
-
-  for (int x = 0; x < 300; x++) {
-    // PEM current measurement
-    selectMuxPin(1);
-    SensorValuePEM = analogRead(zInput);
-
-    // Load current measurement
-    selectMuxPin(0);
-    SensorValueLoad = analogRead(zInput);
-
-    // PV current measurement
-    SensorValuePV = analogRead(A3);
-
-    // Battery current measurement
-    selectMuxPin(3);
-    SensorValueBat = analogRead(zInput);
-
-    // Add samples together
-    SamplesPV   += SensorValuePV;
-    SamplesLoad += SensorValueLoad;
-    SamplesPEM  += SensorValuePEM;
-    SamplesBat  += SensorValueBat;
-
-    delay(3);
-  }
-
-  // Taking average of samples
-  AvgAcsPV   = SamplesPV / 300.0;
-  AvgAcsLoad = SamplesLoad / 300.0;
-  AvgAcsPEM  = SamplesPEM / 300.0;
-  AvgAcsBat  = SamplesBat / 300.0;
-
-  // Calculating currents
-  PVcurrent   = ((AvgAcsPV   * (5 / 1023.0) - nominalVoltage / 2) / 0.4413) + 0.09;
-  Loadcurrent = ((AvgAcsLoad * (5 / 1023.0) - nominalVoltage / 2) / 0.2487) + 0.02;
-  PEMcurrent  = ((AvgAcsPEM  * (5 / 1023.0) - nominalVoltage / 2) / 0.4749) + 0.091;
-  Batcurrent  = ((AvgAcsBat  * (5 / 1023.0) - nominalVoltage / 2) / 0.3276) + 0.09;
+  Batcurrent  = inaBat.getCurrent_mA() / 1000.0;
+  Loadcurrent = inaLoad.getCurrent_mA() / 1000.0;
+  PVcurrent   = inaPV.getCurrent_mA() / 1000.0;
+  PEMcurrent  = inaPEM.getCurrent_mA() / 1000.0;
 }
 
 void GetPower() {
@@ -330,53 +332,109 @@ void GetPower() {
   Batterypower = Batcurrent * batteryVoltage;
 }
 
+float EstimateBatterySOCFromVoltage(float voltage) {
+  float soc = (voltage - BATTERY_EMPTY_TEST_VOLTAGE) * 100.0;
+  soc = soc / (BATTERY_FULL_TEST_VOLTAGE - BATTERY_EMPTY_TEST_VOLTAGE);
+
+  if (soc < 0.0) {
+    soc = 0.0;
+  }
+
+  if (soc > 100.0) {
+    soc = 100.0;
+  }
+
+  return soc;
+}
+
+void UpdateBatterySOC() {
+  unsigned long currentTime = millis();
+
+  // First estimate is based on measured voltage
+  if (lastBatterySOCUpdate == 0) {
+    batterySOC = EstimateBatterySOCFromVoltage(batteryVoltage);
+    batteryEnergyWh = BATTERY_USABLE_ENERGY_WH * batterySOC / 100.0;
+    lastBatterySOCUpdate = currentTime;
+    batteryChargeState = GetBatteryChargeState(batterySOC);
+    return;
+  }
+
+  float dtHours = (currentTime - lastBatterySOCUpdate) / 3600000.0;
+  lastBatterySOCUpdate = currentTime;
+
+  // Positive battery power charges, negative battery power discharges
+  batteryEnergyWh += Batterypower * dtHours;
+
+  if (batteryEnergyWh < 0.0) {
+    batteryEnergyWh = 0.0;
+  }
+
+  if (batteryEnergyWh > BATTERY_USABLE_ENERGY_WH) {
+    batteryEnergyWh = BATTERY_USABLE_ENERGY_WH;
+  }
+
+  batterySOC = 100.0 * batteryEnergyWh / BATTERY_USABLE_ENERGY_WH;
+  batteryChargeState = GetBatteryChargeState(batterySOC);
+}
+
+String GetBatteryChargeState(float soc) {
+  if (soc <= 10.0) {
+    return "empty";
+  } else if (soc <= 30.0) {
+    return "low";
+  } else if (soc <= 70.0) {
+    return "medium";
+  } else if (soc <= 90.0) {
+    return "high";
+  } else {
+    return "full";
+  }
+}
+
 void UpdatePrices() {
   // Price and slot are provided by main.py through Bridge
 }
 
-void selectMuxPin(byte pin) {
-  for (int i = 0; i < 3; i++) {
-    if (pin & (1 << i)) {
-      digitalWrite(selectPins[i], HIGH);
-    } else {
-      digitalWrite(selectPins[i], LOW);
-    }
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Serial output
-// -----------------------------------------------------------------------------
-
 void PrintValues() {
   Monitor.print("Nominal Voltage: ");
   Monitor.print(nominalVoltage);
-  Monitor.print(" PVCurrent: ");
+
+  Monitor.print(" PV Current: ");
   Monitor.print(PVcurrent, 3);
   Monitor.print(" PV Voltage: ");
   Monitor.print(panelVoltage, 3);
   Monitor.print(" PV Power: ");
-  Monitor.print(PVpower);
+  Monitor.print(PVpower, 3);
+
   Monitor.print(" Battery Voltage: ");
-  Monitor.print(batteryVoltage);
+  Monitor.print(batteryVoltage, 3);
   Monitor.print(" Battery Current: ");
   Monitor.print(Batcurrent, 3);
+  Monitor.print(" Battery Power: ");
+  Monitor.print(Batterypower, 3);
+  Monitor.print(" Battery SOC: ");
+  Monitor.print(batterySOC, 1);
+  Monitor.print(" Battery State: ");
+  Monitor.print(batteryChargeState);
+
   Monitor.print(" Load Current: ");
   Monitor.print(Loadcurrent, 3);
   Monitor.print(" Load Voltage: ");
   Monitor.print(loadVoltage, 3);
   Monitor.print(" Load Power: ");
-  Monitor.print(Loadpower);
+  Monitor.print(Loadpower, 3);
+
   Monitor.print(" PEM RFC Current: ");
   Monitor.print(PEMcurrent, 3);
   Monitor.print(" PEM RFC Voltage: ");
-  Monitor.println(pemrfcVoltage, 3);
+  Monitor.print(pemrfcVoltage, 3);
   Monitor.print(" PEM RFC Power: ");
-  Monitor.println(PEMpower);
+  Monitor.print(PEMpower, 3);
+
   Monitor.print(" Electricity price: ");
-  Monitor.println(electricityprice, 5);
+  Monitor.print(electricityprice, 5);
   Monitor.print(" Price slot: ");
-  Monitor.println(priceSlot);
+  Monitor.print(priceSlot);
   Monitor.print(" Mode: ");
   Monitor.println(mode);
 }
@@ -398,6 +456,12 @@ void CSVPrintValues() {
   Monitor.print(",");
   Monitor.print(Batterypower);
   Monitor.print(",");
+  Monitor.print(batterySOC);
+  Monitor.print(",");
+  Monitor.print(batteryEnergyWh);
+  Monitor.print(",");
+  Monitor.print(batteryChargeState);
+  Monitor.print(",");
   Monitor.print(pemrfcVoltage);
   Monitor.print(",");
   Monitor.print(PEMcurrent);
@@ -418,13 +482,8 @@ void CSVPrintValues() {
   Monitor.print("\n");
 }
 
-// -----------------------------------------------------------------------------
-// Scenarios
-// -----------------------------------------------------------------------------
-
-// Scenario 1:
-// Load receives power from grid, PV OFF, Battery OFF, PEM RFC OFF
 void Scenario1() {
+  // Grid supplies load
   digitalWrite(K1, HIGH);
   digitalWrite(K2, LOW);
   digitalWrite(K3, HIGH);
@@ -432,7 +491,9 @@ void Scenario1() {
   digitalWrite(K5, HIGH);
   digitalWrite(K6, HIGH);
   digitalWrite(K7, HIGH);
-  mode = "S1 - Load receives power from grid PV OFF Battery OFF PEM RFC OFF";
+
+  mode = "S1 Load from grid PV off battery off PEM off";
+
   digitalWrite(LEDS1, HIGH);
   digitalWrite(LEDS2, LOW);
   digitalWrite(LEDS3, LOW);
@@ -441,9 +502,8 @@ void Scenario1() {
   digitalWrite(LEDS6, LOW);
 }
 
-// Scenario 2:
-// Load receives power from grid, PV charges battery, PEM RFC OFF
 void Scenario2() {
+  // Grid supplies load and PV charges battery
   digitalWrite(K1, HIGH);
   digitalWrite(K2, LOW);
   digitalWrite(K3, LOW);
@@ -451,7 +511,9 @@ void Scenario2() {
   digitalWrite(K5, HIGH);
   digitalWrite(K6, HIGH);
   digitalWrite(K7, LOW);
-  mode = "S2 - Load receives power from grid PV Charges battery PEM RFC OFF";
+
+  mode = "S2 Load from grid PV charges battery PEM off";
+
   digitalWrite(LEDS1, LOW);
   digitalWrite(LEDS2, HIGH);
   digitalWrite(LEDS3, LOW);
@@ -460,9 +522,8 @@ void Scenario2() {
   digitalWrite(LEDS6, LOW);
 }
 
-// Scenario 3:
-// Load receives power from grid, PV charges PEM RFC, battery OFF
 void Scenario3() {
+  // Grid supplies load and PV charges PEM
   digitalWrite(K1, HIGH);
   digitalWrite(K2, LOW);
   digitalWrite(K3, HIGH);
@@ -470,7 +531,9 @@ void Scenario3() {
   digitalWrite(K5, HIGH);
   digitalWrite(K6, HIGH);
   digitalWrite(K7, LOW);
-  mode = "S3 - Load receives power from grid PV Charges PEM RFC battery OFF";
+
+  mode = "S3 Load from grid PV charges PEM battery off";
+
   digitalWrite(LEDS1, LOW);
   digitalWrite(LEDS2, LOW);
   digitalWrite(LEDS3, HIGH);
@@ -479,9 +542,8 @@ void Scenario3() {
   digitalWrite(LEDS6, LOW);
 }
 
-// Scenario 4:
-// Load receives power from PV only, battery OFF, PEM RFC OFF
 void Scenario4() {
+  // PV supplies load
   digitalWrite(K1, LOW);
   digitalWrite(K2, HIGH);
   digitalWrite(K3, HIGH);
@@ -489,7 +551,9 @@ void Scenario4() {
   digitalWrite(K5, HIGH);
   digitalWrite(K6, HIGH);
   digitalWrite(K7, LOW);
-  mode = "S4 - Load receives power from PV battery OFF PEM RFC OFF";
+
+  mode = "S4 Load from PV battery off PEM off";
+
   digitalWrite(LEDS1, LOW);
   digitalWrite(LEDS2, LOW);
   digitalWrite(LEDS3, LOW);
@@ -498,9 +562,8 @@ void Scenario4() {
   digitalWrite(LEDS6, LOW);
 }
 
-// Scenario 5:
-// Load receives power from battery, PEM RFC OFF, PV OFF
 void Scenario5() {
+  // Battery supplies load
   digitalWrite(K1, LOW);
   digitalWrite(K2, LOW);
   digitalWrite(K3, HIGH);
@@ -508,7 +571,9 @@ void Scenario5() {
   digitalWrite(K5, LOW);
   digitalWrite(K6, HIGH);
   digitalWrite(K7, HIGH);
-  mode = "S5 - Load receives power from battery PEM RFC OFF PV OFF";
+
+  mode = "S5 Load from battery PEM off PV off";
+
   digitalWrite(LEDS1, LOW);
   digitalWrite(LEDS2, LOW);
   digitalWrite(LEDS3, LOW);
@@ -517,9 +582,8 @@ void Scenario5() {
   digitalWrite(LEDS6, LOW);
 }
 
-// Scenario 6:
-// Load receives power from PEM, Battery OFF, PV OFF
 void Scenario6() {
+  // PEM supplies load
   digitalWrite(K1, LOW);
   digitalWrite(K2, LOW);
   digitalWrite(K3, HIGH);
@@ -527,7 +591,9 @@ void Scenario6() {
   digitalWrite(K5, HIGH);
   digitalWrite(K6, LOW);
   digitalWrite(K7, HIGH);
-  mode = "S6 - Load receives power from PEM Battery OFF PV OFF";
+
+  mode = "S6 Load from PEM battery off PV off";
+
   digitalWrite(LEDS1, LOW);
   digitalWrite(LEDS2, LOW);
   digitalWrite(LEDS3, LOW);

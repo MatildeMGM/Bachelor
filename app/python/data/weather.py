@@ -3,10 +3,13 @@
 # needed for PV estimation.
 
 from datetime import datetime, timedelta
-
+from zoneinfo import ZoneInfo
 import requests
 
-from app.python.config import DK_TZ, LATITUDE, LONGITUDE
+from app.python.config import LATITUDE, LONGITUDE
+
+TIMEZONE = "Europe/Copenhagen"
+DK_TZ = ZoneInfo(TIMEZONE)
 
 REQUEST_TIMEOUT = 10
 
@@ -20,7 +23,7 @@ def fetch_weather_forecast_for_today():
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
         "hourly": "shortwave_radiation,temperature_2m",
-        "timezone": "Europe/Copenhagen",
+        "timezone": TIMEZONE,
         "start_date": today_dk.isoformat(),
         "end_date": tomorrow_dk.isoformat(),
     }
@@ -33,7 +36,6 @@ def fetch_weather_forecast_for_today():
     response.raise_for_status()
 
     data = response.json()
-
     hourly = data.get("hourly", {})
 
     times = hourly.get("time", [])
@@ -48,6 +50,11 @@ def fetch_weather_forecast_for_today():
     for t, rad, temp in zip(times, radiation, temperature):
         try:
             time_dk = datetime.fromisoformat(t)
+
+            # FIX: ensure timezone aware
+            if time_dk.tzinfo is None:
+                time_dk = time_dk.replace(tzinfo=DK_TZ)
+
         except ValueError:
             continue
 
@@ -68,8 +75,3 @@ def fetch_weather_forecast_for_today():
         raise RuntimeError("No valid weather forecast data for today.")
 
     return rows
-
-if __name__ == "__main__":
-    rows = fetch_weather_forecast_for_today()
-    print("Rows:", len(rows))
-    print("First 2:", rows[:2])

@@ -1,69 +1,146 @@
-from app.python.data.weather import fetch_weather_forecast_for_today
+import numpy as np
+import pandas as pd
+import pvlib
 
 
 RATED_POWER_W = 1.0
+GAMMA_PDC = -0.004
 
-# Replace this placeholder value once the laboratory correction factor
-# has been determined from measurements of the PV panel under the
-# relevant test conditions.
-PV_CORRECTION_FACTOR = 1.0
+SURFACE_TILT = 45
+SURFACE_AZIMUTH = 180
+
+LATITUDE = 55.686
+LONGITUDE = 12.101
+TIMEZONE = "Europe/Copenhagen"
 
 
-def interpolate_hourly_to_quarter_hour(hourly_values):
-    if len(hourly_values) < 2:
-        raise ValueError("Not enough PV values for interpolation.")
+def pv_forecast_from_weather(weather_rows):
+    """
+    Estimate lab scale PV power from weather forecast data.
+    Returns hourly PV power values in W.
 
+    Args:
+            name (str): name.
+            latitude (float): latitude [degree].
+            longitude (float): longitude [degree].
+            pdc0 (float): DC power at refence conditions (1000 W/m^2 and 25 C) [W].
+            gamma_pdc (float): temperature coefficient of power [1/C].
+            surface_tilt (float): surface tilt from horizontal [degree].
+            surface_azimuth (float): surface azimuth from north [degree].
+    """
+
+    times = [row[0] for row in weather_rows]
+    ghi = [row[1] for row in weather_rows]
+    temp_air = [row[2] for row in weather_rows]
+
+    index = pd.DatetimeIndex(times)
+
+    if index.tz is None:
+        index = index.tz_localize(TIMEZONE)
+
+    weather = pd.DataFrame(
+        {
+            "ghi": ghi,
+            "temp_air": temp_air,
+        },
+        index=index,
+    )
+
+    location = pvlib.location.Location(
+        latitude=LATITUDE,
+        longitude=LONGITUDE,
+        tz=TIMEZONE,
+    )
+
+    solar_position = location.get_solarposition(weather.index)
+
+    erbs = pvlib.irradiance.erbs(
+        ghi=weather["ghi"],
+        zenith=solar_position["zenith"],
+        datetime_or_doy=weather.index,
+    )
+
+    dni = erbs["dni"]
+    dhi = erbs["dhi"]
+
+    poa = pvlib.irradiance.get_total_irradiance(
+        surface_tilt=SURFACE_TILT,
+        surface_azimuth=SURFACE_AZIMUTH,
+        solar_zenith=solar_position["zenith"],
+        solar_azimuth=solar_position["azimuth"],
+        dni=dni,
+        ghi=weather["ghi"],
+        dhi=dhi,
+    )
+
+    cell_temperature = pvlib.temperature.sapm_cell(
+        poa_global=poa["poa_global"],
+        temp_air=weather["temp_air"],
+        wind_speed=1.0,
+        **pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"]["open_rack_glass_glass"],
+    )
+
+    power_dc = pvlib.pvsystem.pvwatts_dc(
+        effective_irradiance=poa["poa_global"],
+        temp_cell=cell_temperature,
+        pdc0=RATED_POWER_W,
+        gamma_pdc=GAMMA_PDC,
+    )
+
+    power_dc = power_dc.clip(lower=0.0, upper=RATED_POWER_W)
+
+    return power_dc.to_numpy()
+
+
+def pv_15_min_resolution(hourly_values):
     quarter_hour_values = []
-    n = len(hourly_values)
 
-    for i in range(n):
-        start_value = hourly_values[i]
+    for i in range(len(hourly_values)):
+        start = hourly_values[i]
 
-        if i < n - 1:
-            end_value = hourly_values[i + 1]
+        if i < len(hourly_values) - 1:
+            end = hourly_values[i + 1]
         else:
-            end_value = start_value
+            end = start
 
-        quarter_hour_values.append(start_value)
-        quarter_hour_values.append(start_value + (end_value - start_value) * 0.25)
-        quarter_hour_values.append(start_value + (end_value - start_value) * 0.50)
-        quarter_hour_values.append(start_value + (end_value - start_value) * 0.75)
+        quarter_hour_values.append(start)
+        quarter_hour_values.append(start + 0.25 * (end - start))
+        quarter_hour_values.append(start + 0.50 * (end - start))
+        quarter_hour_values.append(start + 0.75 * (end - start))
 
-    return quarter_hour_values
-
-
+    return np.array(quarter_hour_values)
 
 
-def fetch_pv_forecast_for_today():
-    weather_rows = fetch_weather_forecast_for_today()
+def scale_pv_forecast_for_scheduler(pv_values):
+    scaled = []
 
-    hourly_pv_values = []
+    for pv_w in pv_values:
+        pv_index = pv_w / RATED_POWER_W
+        pv_index = max(0.0, min(pv_index, 1.0))
 
-    for _, shortwave_radiation, _ in weather_rows:
-        pv_dc_w = (shortwave_radiation / 1000.0) * RATED_POWER_W
-        pv_ac_w = pv_dc_w * PV_CORRECTION_FACTOR
-        pv_ac_w = max(0.0, min(pv_ac_w, RATED_POWER_W))
+        if pv_index < 0.15:
+            pv_level = "low"
+        elif pv_index < 0.60:
+            pv_level = "medium"
+        else:
+            pv_level = "high"
 
-        hourly_pv_values.append(pv_ac_w)
+        scaled.append({
+            "pv_w": float(pv_w),
+            "pv_index": float(pv_index),
+            "pv_level": pv_level,
+        })
 
-    if not hourly_pv_values:
-        raise RuntimeError("No PV forecast values found for today.")
-
-    quarter_hour_pv_values = interpolate_hourly_to_quarter_hour(hourly_pv_values)
-
-    if len(quarter_hour_pv_values) != 96:
-        raise RuntimeError(
-            f"Expected 96 quarter-hour PV values, got {len(quarter_hour_pv_values)}"
-        )
-
-    return quarter_hour_pv_values
+    return scaled
 
 
+def pv_forecast_96_slots(weather_rows):
+    hourly_pv = pv_forecast_from_weather(weather_rows)
 
+    pv_96 = pv_15_min_resolution(hourly_pv)
 
-if __name__ == "__main__":
-    pv = fetch_pv_forecast_for_today()
-    print("Length:", len(pv))
-    print("First 8:", pv[:8])
-    print("Middle 8:", pv[40:48])
-    print("Last 8:", pv[-8:])
+    if len(pv_96) != 96:
+        raise RuntimeError(f"Expected 96 PV values, got {len(pv_96)}")
+
+    return pv_96
+

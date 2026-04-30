@@ -26,4 +26,4 @@ openpyxl
 matplotlib
 
 
-#when all works: pip freeze > requirements.txt
+# when all works: pip freeze > requirements.txt

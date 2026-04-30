@@ -52,6 +52,11 @@ class EMSState:
         self.clients = 0
         self.arduino_status = {}
 
+        #battery
+        self.battery_soc = 0.0
+        self.battery_energy_wh = 0.0
+        self.battery_charge_state = ""
+
 
 state = EMSState()
 state_lock = threading.Lock()

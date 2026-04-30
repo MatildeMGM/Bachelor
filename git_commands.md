@@ -14,7 +14,12 @@ git add .
 git commit -m "Beskrivelse"
 
 # Hent ændres ændringer ind 
-git pull
-
+git pull --no-edit
+git 
 # Push til GitHub
-git push origin <branch-navn>
+git push origin <branch-n
+
+
+# Hent main ind i branch 
+git fetch origin
+git merge origin/main
