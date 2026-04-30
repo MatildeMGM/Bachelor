@@ -19,6 +19,13 @@
 
 ## Battery
 
+3.0 V minimum
+4.2 V maximum
+6.33 Wh usable energy
+90 percent SOC as full
+10 percent SOC as empty
+
+
 - Battery voltage  
 Measured range: approximately 3.0 V to 3.97 V during the discharge test.
 
