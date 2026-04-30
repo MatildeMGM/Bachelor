@@ -30,12 +30,12 @@ function getPriceScheme(price) {
 function getScenarioLabel(mode) {
   if (!mode) return "Unknown";
 
-  if (mode.includes("grid PV OFF Battery OFF PEM RFC OFF")) return "Scenario 1";
-  if (mode.includes("grid PV Charges battery")) return "Scenario 2";
-  if (mode.includes("grid PV Charges PEM RFC")) return "Scenario 3";
-  if (mode.includes("power from PV")) return "Scenario 4";
-  if (mode.includes("power from battery")) return "Scenario 5";
-  if (mode.includes("power from PEM")) return "Scenario 6";
+  if (mode.includes("S1")) return "Scenario 1";
+  if (mode.includes("S2")) return "Scenario 2";
+  if (mode.includes("S3")) return "Scenario 3";
+  if (mode.includes("S4")) return "Scenario 4";
+  if (mode.includes("S5")) return "Scenario 5";
+  if (mode.includes("S6")) return "Scenario 6";
 
   return "Unknown";
 }
@@ -128,10 +128,12 @@ function renderAll(data) {
   setText("clientsText", rt.clients ?? "-");
   setText("sourceText", rt.price_source ?? "-");
   setText("sketchSlotText", s.slot ?? "-");
+
   setText(
     "priceReceivedText",
     s.priceReceived === 1 ? "Yes" : (s.priceReceived === 0 ? "No" : "-")
   );
+
   setText("lastUpdateText", `Last update: ${rt.last_price_update || "-"}`);
   setText("errorText", rt.last_error || "");
   setText("scenarioDescription", getScenarioDescription(scenario));
@@ -150,6 +152,10 @@ function renderAll(data) {
   setText("Batterypower", fmt(s.Batterypower));
   setText("PEMpower", fmt(s.PEMpower));
   setText("Loadpower", fmt(s.Loadpower));
+
+  setText("batterySOC", `${fmt(s.batterySOC, 1)} %`);
+  setText("batteryEnergyWh", `${fmt(s.batteryEnergyWh, 3)} Wh`);
+  setText("batteryChargeState", s.batteryChargeState || "-");
 
   setBadge(
     "bridgeBadge",
@@ -186,11 +192,17 @@ document.addEventListener("DOMContentLoaded", () => {
     renderAll(data);
   });
 
-  document.getElementById("refreshBtn").addEventListener("click", () => {
-    sendControl("refresh");
-  });
+  const refreshBtn = document.getElementById("refreshBtn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      sendControl("refresh");
+    });
+  }
 
-  document.getElementById("zoneSelect").addEventListener("change", (e) => {
-    sendControl("set_zone", { zone: e.target.value });
-  });
+  const zoneSelect = document.getElementById("zoneSelect");
+  if (zoneSelect) {
+    zoneSelect.addEventListener("change", (e) => {
+      sendControl("set_zone", { zone: e.target.value });
+    });
+  }
 });
