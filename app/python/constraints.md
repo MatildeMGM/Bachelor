@@ -100,8 +100,6 @@ full: 90 to 100 percent (above approx. 3.9 V)
 - Switching elements (relay/MOSFET states)  
 - Safe switching delay  
 
-
-
 # Sketch ino: 
 read INA226 sensors
 control relays or MOSFETs
