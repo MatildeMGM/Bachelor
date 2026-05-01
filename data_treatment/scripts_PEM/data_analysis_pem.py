@@ -20,12 +20,12 @@ BACHELOR_DIR = find_bachelor_dir()
 
 DATA_DIR = BACHELOR_DIR / "data" / "PEM_test"
 CHARGE_DISCHARGE_DIR = DATA_DIR / "charge_discharge"
-SWEEP_DIR = DATA_DIR / "current_sweep"
+#SWEEP_DIR = DATA_DIR / "current_sweep"
 
 VOLUME_FILE = BACHELOR_DIR / "data" / "PEM_test" / "volume_readings" / "readings.csv"
 
 OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_PEM"
-PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots"
+PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "pem_plots"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -124,7 +124,7 @@ def integrate_energy(time_s, power_w):
     if len(time_s) < 2:
         return 0.0
 
-    return np.trapz(power_w, time_s)
+    return np.trapezoid(power_w, time_s)
 
 
 def summarize_combined_file(file_path, volume_data):
@@ -211,29 +211,29 @@ def summarize_combined_file(file_path, volume_data):
     }
 
 
-def summarize_sweep(file_path):
-    df = read_log(file_path)
+# def summarize_sweep(file_path):
+#     df = read_log(file_path)
 
-    collapse_points = df[df["pem_voltage_V"] < CUTOFF_VOLTAGE]
+#     collapse_points = df[df["pem_voltage_V"] < CUTOFF_VOLTAGE]
 
-    if len(collapse_points) > 0:
-        collapse_index = collapse_points.index[0]
-        location = df.index.get_loc(collapse_index)
-        previous_index = df.index[location - 1] if location > 0 else collapse_index
+#     if len(collapse_points) > 0:
+#         collapse_index = collapse_points.index[0]
+#         location = df.index.get_loc(collapse_index)
+#         previous_index = df.index[location - 1] if location > 0 else collapse_index
 
-        max_sustainable_current_a = abs(df.loc[previous_index, "pem_current_A"])
-        collapse_voltage_v = df.loc[collapse_index, "pem_voltage_V"]
-    else:
-        max_sustainable_current_a = abs(df["pem_current_A"]).max()
-        collapse_voltage_v = df["pem_voltage_V"].min()
+#         max_sustainable_current_a = abs(df.loc[previous_index, "pem_current_A"])
+#         collapse_voltage_v = df.loc[collapse_index, "pem_voltage_V"]
+#     else:
+#         max_sustainable_current_a = abs(df["pem_current_A"]).max()
+#         collapse_voltage_v = df["pem_voltage_V"].min()
 
-    return {
-        "file": file_path.name,
-        "max_sustainable_current_A": max_sustainable_current_a,
-        "collapse_voltage_V": collapse_voltage_v,
-        "max_power_W": abs(df["pem_power_W"]).max(),
-        "min_voltage_V": df["pem_voltage_V"].min(),
-    }
+#     return {
+#         "file": file_path.name,
+#         "max_sustainable_current_A": max_sustainable_current_a,
+#         "collapse_voltage_V": collapse_voltage_v,
+#         "max_power_W": abs(df["pem_power_W"]).max(),
+#         "min_voltage_V": df["pem_voltage_V"].min(),
+#     }
 
 
 def make_state_table(summary):
@@ -267,7 +267,7 @@ def make_state_table(summary):
     ]
 
 
-def make_control_parameters(summary, sweep_summary):
+def make_control_parameters(summary):
     usable = summary[
         (summary["usable_discharge_duration_s"] > 0)
         & (summary["output_energy_J"] > 0)
@@ -280,10 +280,7 @@ def make_control_parameters(summary, sweep_summary):
         minimum_hydrogen_level_mL = np.nan
         minimum_charge_time_s = np.nan
 
-    if len(sweep_summary) > 0:
-        maximum_usable_discharge_current_A = sweep_summary["max_sustainable_current_A"].min()
-    else:
-        maximum_usable_discharge_current_A = summary["max_discharge_current_A"].max()
+    maximum_usable_discharge_current_A = summary["max_discharge_current_A"].max()
 
     control = pd.DataFrame([
         {
@@ -297,7 +294,6 @@ def make_control_parameters(summary, sweep_summary):
     ])
 
     return control
-
 
 def plot_charge_power():
     plt.figure()
@@ -406,30 +402,30 @@ def plot_output_energy_vs_hydrogen(summary):
     plt.close()
 
 
-def plot_sweep():
-    for file_path in sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv")):
-        df = read_log(file_path)
-        df_sorted = df.sort_values(by="pem_current_A")
+# def plot_sweep():
+#     for file_path in sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv")):
+#         df = read_log(file_path)
+#         df_sorted = df.sort_values(by="pem_current_A")
 
-        plt.figure()
-        plt.plot(
-            abs(df_sorted["pem_current_A"]) * 1000,
-            df_sorted["pem_voltage_V"],
-            marker="o",
-            markersize=3,
-            label="Measured I V curve"
-        )
+#         plt.figure()
+#         plt.plot(
+#             abs(df_sorted["pem_current_A"]) * 1000,
+#             df_sorted["pem_voltage_V"],
+#             marker="o",
+#             markersize=3,
+#             label="Measured I V curve"
+#         )
 
-        plt.axhline(CUTOFF_VOLTAGE, linestyle=":", label="Cutoff voltage")
+#         plt.axhline(CUTOFF_VOLTAGE, linestyle=":", label="Cutoff voltage")
 
-        plt.xlabel("Current [mA]")
-        plt.ylabel("Voltage [V]")
-        plt.title(f"PEM I V curve: {file_path.stem}")
-        plt.legend()
-        plt.tight_layout()
+#         plt.xlabel("Current [mA]")
+#         plt.ylabel("Voltage [V]")
+#         plt.title(f"PEM I V curve: {file_path.stem}")
+#         plt.legend()
+#         plt.tight_layout()
 
-        plt.savefig(PLOT_DIR / f"{file_path.stem}_iv_curve.png", dpi=300)
-        plt.close()
+#         plt.savefig(PLOT_DIR / f"{file_path.stem}_iv_curve.png", dpi=300)
+#         plt.close()
 
 
 def main():
@@ -438,31 +434,37 @@ def main():
     combined_rows = []
 
     for file_path in sorted(CHARGE_DISCHARGE_DIR.glob("*.csv")):
-        combined_rows.append(summarize_combined_file(file_path, volume_data))
+        if file_path.stat().st_size == 0:
+            print(f"Skipping empty file: {file_path.name}")
+            continue
+
+        combined_rows.append(
+            summarize_combined_file(file_path, volume_data)
+        )
 
     combined_summary = pd.DataFrame(combined_rows)
 
-    sweep_rows = []
-
-    for file_path in sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv")):
-        sweep_rows.append(summarize_sweep(file_path))
-
-    sweep_summary = pd.DataFrame(sweep_rows)
-
     pem_state_table = make_state_table(combined_summary)
-    control_parameters = make_control_parameters(combined_summary, sweep_summary)
+    control_parameters = make_control_parameters(combined_summary)
 
-    combined_summary.to_csv(OUTPUT_DIR / "pem_charge_discharge_summary.csv", index=False)
-    pem_state_table.to_csv(OUTPUT_DIR / "pem_state_table.csv", index=False)
-    sweep_summary.to_csv(OUTPUT_DIR / "current_sweep_summary.csv", index=False)
-    control_parameters.to_csv(OUTPUT_DIR / "pem_control_parameters.csv", index=False)
+    combined_summary.to_csv(
+        OUTPUT_DIR / "pem_charge_discharge_summary.csv",
+        index=False
+    )
+    pem_state_table.to_csv(
+        OUTPUT_DIR / "pem_state_table.csv",
+        index=False
+    )
+    control_parameters.to_csv(
+        OUTPUT_DIR / "pem_control_parameters.csv",
+        index=False
+    )
 
     plot_charge_power()
     plot_discharge_voltage()
     plot_output_energy(combined_summary)
     plot_hydrogen_volume(combined_summary)
     plot_output_energy_vs_hydrogen(combined_summary)
-    plot_sweep()
 
     print("\nPEM state table:")
     print(pem_state_table)

@@ -1,0 +1,2 @@
+minimum_hydrogen_level_for_discharge_mL,minimum_usable_fuel_cell_voltage_V,maximum_usable_discharge_current_A,maximum_electrolysis_current_A,minimum_charge_time_before_useful_discharge_s,minimum_time_before_switching_mode_s
+0.2,0.5,0.0627,0.4,30,30
