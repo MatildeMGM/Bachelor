@@ -12,7 +12,7 @@ BACHELOR_DIR = SCRIPT_DIR.parents[1]
 DATA_DIR = BACHELOR_DIR / "data" / "Battery_test"
 
 OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_Battery"
-PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots"
+PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "battery_plots"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
