@@ -1,2 +1,2 @@
 file,max_sustainable_current_A,collapse_voltage_V,max_power_W,min_voltage_V
-sweep_increasing_load_old.csv,0.249825,0.4888,0.13172875,0.0088
+sweep_increasing_load_old.csv,0.15921215000000002,0.4935,0.09426058116000001,-0.0552
