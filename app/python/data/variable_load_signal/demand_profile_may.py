@@ -18,7 +18,7 @@ OUTPUT_FILE = SCRIPT_DIR / "typical_may_load_profile_15min.csv"
 
 # threshholds for scaling the load profile to a realistic range for the EMS
 MIN_POWER_MW = 0
-MAX_POWER_MW = 100
+MAX_POWER_MW = 150
 
 SCALED_OUTPUT_FILE = SCRIPT_DIR / "scaled_may_power_profile_15min.csv"
 SCALED_PLOT_FILE = SCRIPT_DIR / "scaled_may_power_profile_15min.png"
@@ -195,7 +195,7 @@ def plot_scaled_power_profile(scaled_profile):
     plt.xticks(scaled_profile["time_of_day"][::8], rotation=45)
     plt.xlabel("Time of day")
     plt.ylabel("Power [mW]")
-    plt.title("Scaled May demand profile (0–100 mW)")
+    plt.title(f"Scaled May demand profile ({MIN_POWER_MW}-{MAX_POWER_MW} mW)")
     plt.tight_layout()
     plt.savefig(SCALED_PLOT_FILE, dpi=300)
     plt.show()

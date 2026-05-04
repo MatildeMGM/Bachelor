@@ -36,6 +36,11 @@ int priceSlot = 0;
 float electricityprice = 0.0;
 bool priceReceived = false;
 
+// Python scheduler command
+int requestedScenario = 1;
+float requestedDemand_mW = 0.0;
+bool scenarioReceived = false;
+
 // PEMRFC time variables
 const long period2 = 60000;
 unsigned long starttime = 0;
@@ -51,6 +56,12 @@ const float BATTERY_MAX_CHARGE_CURRENT_A = 1.0;
 const float BATTERY_MAX_DISCHARGE_CURRENT_A = 0.16;
 const float BATTERY_LOW_SOC = 10.0;
 const float BATTERY_FULL_SOC = 90.0;
+const float PV_MIN_USABLE_VOLTAGE = 2.145;
+const float PV_MIN_LOAD_POWER_W = 0.050;
+const float PV_MIN_CHARGE_POWER_W = 0.023;
+const float PEM_MIN_USABLE_VOLTAGE = 0.4935;
+const float PEM_MAX_DISCHARGE_POWER_W = 0.094;
+const float SAFETY_MARGIN_W = 0.005;
 
 // Measured values
 float nominalVoltage = 0.0;
@@ -93,9 +104,6 @@ void Scenario4();
 void Scenario5();
 void Scenario6();
 
-void HighPriceScheme();
-void LowPriceScheme();
-
 void GetVoltage();
 void GetCurrent();
 void GetPower();
@@ -109,7 +117,10 @@ float EstimateBatterySOCFromVoltage(float voltage);
 String GetBatteryChargeState(float soc);
 
 bool apply_price_frame(String payload);
+bool apply_scenario_frame(String payload);
 String get_status();
+bool IsScenarioSafe(int scenario, float demandW);
+void ApplyScenario(int scenario);
 
 void setup() {
   Monitor.begin();
@@ -118,6 +129,7 @@ void setup() {
 
   Bridge.begin();
   Bridge.provide("apply_price_frame", apply_price_frame);
+  Bridge.provide("apply_scenario_frame", apply_scenario_frame);
   Bridge.provide("get_status", get_status);
 
   Wire.begin();
@@ -163,13 +175,6 @@ void loop() {
   if (millis() - lastPrint >= printInterval) {
     lastPrint = millis();
     PrintValues();
-  }
-
-  // Select price scheme
-  if (electricityprice >= 0.6) {
-    HighPriceScheme();
-  } else {
-    LowPriceScheme();
   }
 
   delay(400);
@@ -223,6 +228,48 @@ bool apply_price_frame(String payload) {
   return true;
 }
 
+bool apply_scenario_frame(String payload) {
+  // Expected format: SCENARIO,<slot>,<scenario>,<demand_mW>
+  if (!payload.startsWith("SCENARIO,")) {
+    return false;
+  }
+
+  int c1 = payload.indexOf(',');
+  int c2 = payload.indexOf(',', c1 + 1);
+  int c3 = payload.indexOf(',', c2 + 1);
+
+  if (c1 < 0 || c2 < 0 || c3 < 0) {
+    return false;
+  }
+
+  priceSlot = payload.substring(c1 + 1, c2).toInt();
+  requestedScenario = payload.substring(c2 + 1, c3).toInt();
+  requestedDemand_mW = payload.substring(c3 + 1).toFloat();
+  scenarioReceived = true;
+
+  GetVoltage();
+  GetCurrent();
+  GetPower();
+  UpdateBatterySOC();
+
+  float demandW = requestedDemand_mW / 1000.0;
+
+  if (!IsScenarioSafe(requestedScenario, demandW)) {
+    Scenario1();
+    Monitor.println("Requested scenario rejected, using Scenario 1");
+    return false;
+  }
+
+  ApplyScenario(requestedScenario);
+
+  Monitor.print("Applied Python scenario: S");
+  Monitor.print(requestedScenario);
+  Monitor.print(" demand_mW: ");
+  Monitor.println(requestedDemand_mW, 1);
+
+  return true;
+}
+
 String get_status() {
   String payload = "";
 
@@ -250,60 +297,63 @@ String get_status() {
 
   payload += ",mode=" + mode;
   payload += ",priceReceived=" + String(priceReceived ? 1 : 0);
+  payload += ",scenarioReceived=" + String(scenarioReceived ? 1 : 0);
+  payload += ",requestedScenario=" + String(requestedScenario);
+  payload += ",requestedDemand_mW=" + String(requestedDemand_mW, 1);
 
   return payload;
 }
 
-void HighPriceScheme() {
-  // High price: prefer PV, then battery, then PEM, then grid
-  if ((digitalRead(K1) == LOW && digitalRead(K2) == HIGH && digitalRead(K7) == LOW && loadVoltage > 0.15) || panelVoltage > 2.0) {
-    Scenario4();
-  } else if (batCharged && batteryVoltage > BATTERY_MIN_VOLTAGE && batterySOC > BATTERY_LOW_SOC) {
-    Scenario5();
-  } else if ((digitalRead(K1) == LOW && digitalRead(K6) == LOW && loadVoltage > 0.2) || (pemCharged && pemrfcVoltage > 0.5)) {
-    Scenario6();
-    batCharged = false;
-  } else {
-    pemCharged = false;
-    batCharged = false;
-    Scenario1();
+bool IsScenarioSafe(int scenario, float demandW) {
+  if (scenario == 1) {
+    return true;
   }
+
+  if (scenario == 2) {
+    return panelVoltage >= PV_MIN_USABLE_VOLTAGE &&
+           PVpower >= PV_MIN_CHARGE_POWER_W &&
+           batteryVoltage < BATTERY_MAX_VOLTAGE &&
+           batterySOC < BATTERY_FULL_SOC;
+  }
+
+  if (scenario == 3) {
+    return panelVoltage >= PV_MIN_USABLE_VOLTAGE &&
+           PVpower >= PV_MIN_CHARGE_POWER_W;
+  }
+
+  if (scenario == 4) {
+    return panelVoltage >= PV_MIN_USABLE_VOLTAGE &&
+           PVpower >= demandW + SAFETY_MARGIN_W &&
+           PVpower >= PV_MIN_LOAD_POWER_W;
+  }
+
+  if (scenario == 5) {
+    return batteryVoltage >= BATTERY_MIN_VOLTAGE &&
+           batterySOC > BATTERY_LOW_SOC &&
+           demandW <= BATTERY_MAX_DISCHARGE_CURRENT_A * batteryVoltage;
+  }
+
+  if (scenario == 6) {
+    return pemrfcVoltage >= PEM_MIN_USABLE_VOLTAGE &&
+           demandW <= PEM_MAX_DISCHARGE_POWER_W;
+  }
+
+  return false;
 }
 
-void LowPriceScheme() {
-  // Low price: use grid for load and charge storage from PV
-  if (panelVoltage > 2.0 || PEM_flag == true) {
-    if (((digitalRead(K3) == LOW && digitalRead(K5) == HIGH &&
-          batteryVoltage < BATTERY_MAX_VOLTAGE &&
-          batterySOC < BATTERY_FULL_SOC &&
-          Batcurrent < BATTERY_MAX_CHARGE_CURRENT_A &&
-          PEM_flag == false)) ||
-        ((batteryVoltage < BATTERY_MAX_VOLTAGE &&
-          batterySOC < BATTERY_FULL_SOC &&
-          Batcurrent < BATTERY_MAX_CHARGE_CURRENT_A &&
-          PEM_flag == false))) {
-
-      Scenario2();
-
-      if (batterySOC >= BATTERY_FULL_SOC || batteryVoltage >= BATTERY_FULL_TEST_VOLTAGE) {
-        batCharged = true;
-      }
-
-    } else if (PEMcurrent >= -0.1) {
-      Scenario3();
-      PEM_flag = true;
-
-      if (pemCharged == false && starttime == 0) {
-        starttime = millis();
-      }
-
-      if (millis() - starttime >= period2) {
-        pemCharged = true;
-      }
-
-    } else {
-      Scenario1();
-    }
+void ApplyScenario(int scenario) {
+  if (scenario == 1) {
+    Scenario1();
+  } else if (scenario == 2) {
+    Scenario2();
+  } else if (scenario == 3) {
+    Scenario3();
+  } else if (scenario == 4) {
+    Scenario4();
+  } else if (scenario == 5) {
+    Scenario5();
+  } else if (scenario == 6) {
+    Scenario6();
   } else {
     Scenario1();
   }

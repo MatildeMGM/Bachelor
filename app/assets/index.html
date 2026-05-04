@@ -25,6 +25,7 @@
     <section class="toolbar card">
       <div class="toolbar-group">
         <button class="btn primary" id="refreshBtn">Refresh now</button>
+        <button class="btn" id="restartDemoBtn">Restart demo</button>
       </div>
 
       <div class="toolbar-group right">
@@ -51,6 +52,10 @@
           <strong id="kpiSlot">-</strong>
         </div>
         <div class="card kpi">
+          <span>Demand setpoint</span>
+          <strong id="kpiDemand">-</strong>
+        </div>
+        <div class="card kpi">
           <span>Electricity price</span>
           <strong id="kpiPrice">-</strong>
         </div>
@@ -74,6 +79,8 @@
             <div>Price source <strong id="sourceText">-</strong></div>
             <div>Sketch slot <strong id="sketchSlotText">-</strong></div>
             <div>Price received <strong id="priceReceivedText">-</strong></div>
+            <div>Demo cycle <strong id="demoCycleText">-</strong></div>
+            <div>Target scenario <strong id="targetScenarioText">-</strong></div>
           </div>
           <p class="note" id="lastUpdateText">Last update: -</p>
           <p class="note error" id="errorText"></p>
@@ -84,6 +91,33 @@
           <div class="scenario-box" id="scenarioDescription">
             Waiting for telemetry...
           </div>
+          <p class="note" id="schedulerReasonText"></p>
+        </div>
+      </section>
+
+      <section class="card live-card">
+        <div class="section-head">
+          <div>
+            <h2>Accelerated Day Timeline</h2>
+            <p class="note">
+              One full demand day is replayed in 12 minutes. The line plot shows why the scheduler chooses each scenario.
+            </p>
+          </div>
+          <div class="legend" id="liveLegend">
+            <span><i class="swatch demand"></i>Demand</span>
+            <span><i class="swatch load"></i>Load</span>
+            <span><i class="swatch pv"></i>PV</span>
+            <span><i class="swatch price"></i>Price</span>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="emsTimeline" height="360"></canvas>
+        </div>
+        <div class="timeline-summary">
+          <div>Decision <strong id="plotDecision">-</strong></div>
+          <div>Reason <strong id="plotReason">-</strong></div>
+          <div>Reserve <strong id="plotReserve">-</strong></div>
+          <div>Live PV <strong id="plotPV">-</strong></div>
         </div>
       </section>
 
