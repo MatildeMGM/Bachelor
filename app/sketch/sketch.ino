@@ -29,22 +29,15 @@ const int LEDS4 = 6;
 const int LEDS5 = 1;
 const int LEDS6 = 13;
 
-// Price variables
-unsigned long previousMillis = 0;
-const long period = 20000;
+// Price and scheduler variables received from Python
 int priceSlot = 0;
 float electricityprice = 0.0;
 bool priceReceived = false;
-
-// Python scheduler command
 int requestedScenario = 1;
 float requestedDemand_mW = 0.0;
 bool scenarioReceived = false;
-
-// PEMRFC time variables
-const long period2 = 60000;
-unsigned long starttime = 0;
-bool PEM_flag = false;
+bool scenarioAccepted = true;
+String lastRejectReason = "";
 
 // Battery limits from test
 const float BATTERY_MIN_VOLTAGE = 3.0;
@@ -92,10 +85,6 @@ const long printInterval = 2000;
 
 String mode = "";
 
-// Initial status
-bool pemCharged = true;
-bool batCharged = true;
-
 // Function declarations
 void Scenario1();
 void Scenario2();
@@ -108,9 +97,7 @@ void GetVoltage();
 void GetCurrent();
 void GetPower();
 void UpdateBatterySOC();
-void UpdatePrices();
 void PrintValues();
-void CSVPrintValues();
 
 void setupINA(INA226_WE &sensor, const char* name);
 float EstimateBatterySOCFromVoltage(float voltage);
@@ -120,6 +107,7 @@ bool apply_price_frame(String payload);
 bool apply_scenario_frame(String payload);
 String get_status();
 bool IsScenarioSafe(int scenario, float demandW);
+String GetScenarioRejectReason(int scenario, float demandW);
 void ApplyScenario(int scenario);
 
 void setup() {
@@ -159,11 +147,6 @@ void setup() {
 }
 
 void loop() {
-  Monitor.println("loop alive");
-  delay(1000);
-
-  UpdatePrices();
-
   // Read sensors and calculate power
   GetVoltage();
   GetCurrent();
@@ -178,12 +161,6 @@ void loop() {
   }
 
   delay(400);
-
-  // Reset PEM charging timer when PEM is not charging
-  if (digitalRead(K4) == HIGH) {
-    starttime = 0;
-    PEM_flag = false;
-  }
 }
 
 void setupINA(INA226_WE &sensor, const char* name) {
@@ -254,9 +231,13 @@ bool apply_scenario_frame(String payload) {
 
   float demandW = requestedDemand_mW / 1000.0;
 
-  if (!IsScenarioSafe(requestedScenario, demandW)) {
+  lastRejectReason = GetScenarioRejectReason(requestedScenario, demandW);
+  scenarioAccepted = lastRejectReason.length() == 0;
+
+  if (!scenarioAccepted) {
     Scenario1();
-    Monitor.println("Requested scenario rejected, using Scenario 1");
+    Monitor.print("Requested scenario rejected: ");
+    Monitor.println(lastRejectReason);
     return false;
   }
 
@@ -298,47 +279,58 @@ String get_status() {
   payload += ",mode=" + mode;
   payload += ",priceReceived=" + String(priceReceived ? 1 : 0);
   payload += ",scenarioReceived=" + String(scenarioReceived ? 1 : 0);
+  payload += ",scenarioAccepted=" + String(scenarioAccepted ? 1 : 0);
   payload += ",requestedScenario=" + String(requestedScenario);
   payload += ",requestedDemand_mW=" + String(requestedDemand_mW, 1);
+  payload += ",lastRejectReason=" + lastRejectReason;
 
   return payload;
 }
 
 bool IsScenarioSafe(int scenario, float demandW) {
+  return GetScenarioRejectReason(scenario, demandW).length() == 0;
+}
+
+String GetScenarioRejectReason(int scenario, float demandW) {
   if (scenario == 1) {
-    return true;
+    return "";
   }
 
   if (scenario == 2) {
-    return panelVoltage >= PV_MIN_USABLE_VOLTAGE &&
-           PVpower >= PV_MIN_CHARGE_POWER_W &&
-           batteryVoltage < BATTERY_MAX_VOLTAGE &&
-           batterySOC < BATTERY_FULL_SOC;
+    if (panelVoltage < PV_MIN_USABLE_VOLTAGE) return "PV voltage too low for battery charging";
+    if (PVpower < PV_MIN_CHARGE_POWER_W) return "PV power too low for battery charging";
+    if (batteryVoltage >= BATTERY_MAX_VOLTAGE) return "battery voltage already high";
+    if (batterySOC >= BATTERY_FULL_SOC) return "battery SOC already full";
+    return "";
   }
 
   if (scenario == 3) {
-    return panelVoltage >= PV_MIN_USABLE_VOLTAGE &&
-           PVpower >= PV_MIN_CHARGE_POWER_W;
+    if (panelVoltage < PV_MIN_USABLE_VOLTAGE) return "PV voltage too low for PEM charging";
+    if (PVpower < PV_MIN_CHARGE_POWER_W) return "PV power too low for PEM charging";
+    return "";
   }
 
   if (scenario == 4) {
-    return panelVoltage >= PV_MIN_USABLE_VOLTAGE &&
-           PVpower >= demandW + SAFETY_MARGIN_W &&
-           PVpower >= PV_MIN_LOAD_POWER_W;
+    if (panelVoltage < PV_MIN_USABLE_VOLTAGE) return "PV voltage too low for load";
+    if (PVpower < PV_MIN_LOAD_POWER_W) return "PV below minimum load power";
+    if (PVpower < demandW + SAFETY_MARGIN_W) return "PV cannot cover demand";
+    return "";
   }
 
   if (scenario == 5) {
-    return batteryVoltage >= BATTERY_MIN_VOLTAGE &&
-           batterySOC > BATTERY_LOW_SOC &&
-           demandW <= BATTERY_MAX_DISCHARGE_CURRENT_A * batteryVoltage;
+    if (batteryVoltage < BATTERY_MIN_VOLTAGE) return "battery voltage too low";
+    if (batterySOC <= BATTERY_LOW_SOC) return "battery SOC too low";
+    if (demandW > BATTERY_MAX_DISCHARGE_CURRENT_A * batteryVoltage) return "demand above battery test limit";
+    return "";
   }
 
   if (scenario == 6) {
-    return pemrfcVoltage >= PEM_MIN_USABLE_VOLTAGE &&
-           demandW <= PEM_MAX_DISCHARGE_POWER_W;
+    if (pemrfcVoltage < PEM_MIN_USABLE_VOLTAGE) return "PEM voltage too low";
+    if (demandW > PEM_MAX_DISCHARGE_POWER_W) return "demand above PEM test limit";
+    return "";
   }
 
-  return false;
+  return "unknown scenario";
 }
 
 void ApplyScenario(int scenario) {
@@ -441,10 +433,6 @@ String GetBatteryChargeState(float soc) {
   }
 }
 
-void UpdatePrices() {
-  // Price and slot are provided by main.py through Bridge
-}
-
 void PrintValues() {
   Monitor.print("Nominal Voltage: ");
   Monitor.print(nominalVoltage);
@@ -487,49 +475,6 @@ void PrintValues() {
   Monitor.print(priceSlot);
   Monitor.print(" Mode: ");
   Monitor.println(mode);
-}
-
-void CSVPrintValues() {
-  Monitor.print(priceSlot);
-  Monitor.print(",");
-  Monitor.print(electricityprice);
-  Monitor.print(",");
-  Monitor.print(panelVoltage);
-  Monitor.print(",");
-  Monitor.print(PVcurrent);
-  Monitor.print(",");
-  Monitor.print(PVpower);
-  Monitor.print(",");
-  Monitor.print(batteryVoltage);
-  Monitor.print(",");
-  Monitor.print(Batcurrent);
-  Monitor.print(",");
-  Monitor.print(Batterypower);
-  Monitor.print(",");
-  Monitor.print(batterySOC);
-  Monitor.print(",");
-  Monitor.print(batteryEnergyWh);
-  Monitor.print(",");
-  Monitor.print(batteryChargeState);
-  Monitor.print(",");
-  Monitor.print(pemrfcVoltage);
-  Monitor.print(",");
-  Monitor.print(PEMcurrent);
-  Monitor.print(",");
-  Monitor.print(PEMpower);
-  Monitor.print(",");
-  Monitor.print(loadVoltage);
-  Monitor.print(",");
-  Monitor.print(Loadcurrent);
-  Monitor.print(",");
-  Monitor.print(Loadpower);
-  Monitor.print(",");
-  Monitor.print(batCharged);
-  Monitor.print(",");
-  Monitor.print(pemCharged);
-  Monitor.print(",");
-  Monitor.print(mode);
-  Monitor.print("\n");
 }
 
 void Scenario1() {

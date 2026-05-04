@@ -43,11 +43,6 @@ class EMSState:
         self.demo_elapsed_seconds = 0.0
         self.demo_started_at = 0.0
 
-        # PV forecast is kept for display only. Control uses live PV measurements.
-        self.pv_forecast = []
-        self.current_pv_forecast = 0.0
-        self.last_pv_update = ""
-
         # Demand lookahead
         self.demand_profile = []
         self.current_demand_w = 0.0
@@ -83,6 +78,8 @@ class EMSState:
         self.schedule_command = ""
         self.last_schedule_update = ""
         self.last_decision_update = ""
+        self.log_file = ""
+        self.last_log_update = ""
 
         # App status
         self.bridge_ok = None

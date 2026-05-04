@@ -92,6 +92,10 @@ function formatSlotInterval(slot) {
     endHour = (endHour + 1) % 24;
   }
 
+  const start = `${pad2(startHour)}:${pad2(startMinute)}`;
+  const end = `${pad2(endHour)}:${pad2(endMinute)}`;
+  return `${start}-${end}`;
+
   return `${pad2(startHour)}:${pad2(startMinute)}–${pad2(endHour)}:${pad2(endMinute)}`;
 }
 
@@ -141,7 +145,7 @@ function rememberPlotPoint(data) {
     loadW: Number(s.Loadpower || 0),
     pvW: Number(decision.live_pv_w || s.PVpower || 0),
     price: Number(data.current_price || 0),
-    scenario: Number(scheduler.target_scenario || getScenarioNumber(s.mode)),
+    scenario: Number(getScenarioNumber(s.mode) || scheduler.target_scenario),
     reason: decision.reason || ""
   });
 }
@@ -317,6 +321,11 @@ function renderAll(data) {
   setText("sketchSlotText", s.slot ?? "-");
   setText("demoCycleText", demo.cycle ?? "-");
   setText("targetScenarioText", scheduler.target_scenario ? `S${scheduler.target_scenario}` : "-");
+  setText(
+    "scenarioAcceptedText",
+    s.scenarioAccepted === 1 ? "Yes" : (s.scenarioAccepted === 0 ? "No" : "-")
+  );
+  setText("rejectReasonText", s.lastRejectReason || "-");
 
   setText(
     "priceReceivedText",
@@ -324,6 +333,7 @@ function renderAll(data) {
   );
 
   setText("lastUpdateText", `Last update: ${rt.last_price_update || "-"}`);
+  setText("logFileText", `Log file: ${scheduler.log_file || "-"}`);
   setText("errorText", rt.last_error || "");
   setText("scenarioDescription", getScenarioDescription(scenario));
   setText("schedulerReasonText", decision.reason || "");
@@ -331,6 +341,8 @@ function renderAll(data) {
   setText("plotReason", decision.reason || "-");
   setText("plotReserve", decision.battery_reserve_soc_percent !== undefined ? `${fmt(decision.battery_reserve_soc_percent, 1)} %` : "-");
   setText("plotPV", decision.live_pv_w !== undefined ? `${fmt(decision.live_pv_w * 1000, 1)} mW` : "-");
+  setText("plotActual", getScenarioNumber(s.mode) ? `S${getScenarioNumber(s.mode)}` : "-");
+  setText("plotAccepted", s.scenarioAccepted === 1 ? "Yes" : (s.scenarioAccepted === 0 ? "No" : "-"));
 
   setText("panelVoltage", fmt(s.panelVoltage));
   setText("batteryVoltage", fmt(s.batteryVoltage));

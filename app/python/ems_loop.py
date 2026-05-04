@@ -1,5 +1,7 @@
+import csv
 import time
 from datetime import datetime
+from pathlib import Path
 
 from arduino.app_bricks.web_ui import WebUI
 
@@ -28,6 +30,31 @@ from app.python.scheduler import (
 ui = WebUI()
 limits = load_limits()
 scheduler_config = SchedulerConfig()
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_FIELDS = [
+    "real_time",
+    "demo_cycle",
+    "sim_slot",
+    "sim_time",
+    "sim_interval",
+    "price_dkk_kwh",
+    "price_state",
+    "demand_w",
+    "target_scenario",
+    "actual_scenario",
+    "scenario_accepted",
+    "reject_reason",
+    "scheduler_reason",
+    "pv_power_w",
+    "load_power_w",
+    "battery_soc_percent",
+    "battery_energy_wh",
+    "pem_hydrogen_est_ml",
+    "battery_voltage_v",
+    "pem_voltage_v",
+    "command",
+]
+logged_slots = set()
 
 
 def get_now():
@@ -112,6 +139,8 @@ def build_payload():
             "current_command": state.current_command,
             "target_scenario": state.target_scenario,
             "last_decision_update": state.last_decision_update,
+            "log_file": state.log_file,
+            "last_log_update": state.last_log_update,
         },
         "arduino_status": state.arduino_status,
     }
@@ -177,6 +206,71 @@ def run_scheduler_decision():
     state.last_decision_update = get_now().isoformat(timespec="seconds")
 
 
+def actual_scenario_from_mode(mode):
+    text = str(mode or "")
+    for scenario in range(1, 7):
+        if f"S{scenario}" in text:
+            return scenario
+    return 0
+
+
+def start_demo_log():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    filename = "ems_demo_{}.csv".format(get_now().strftime("%Y%m%d_%H%M%S"))
+    path = LOG_DIR / filename
+
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=LOG_FIELDS)
+        writer.writeheader()
+
+    state.log_file = str(path)
+    state.last_log_update = ""
+    logged_slots.clear()
+
+
+def log_current_slot():
+    if not state.log_file or not state.current_decision:
+        return
+
+    key = (state.demo_cycle, state.current_slot)
+    if key in logged_slots:
+        return
+
+    decision = state.current_decision
+    status = state.arduino_status
+
+    row = {
+        "real_time": get_now().isoformat(timespec="seconds"),
+        "demo_cycle": state.demo_cycle,
+        "sim_slot": state.current_slot,
+        "sim_time": state.current_time_label,
+        "sim_interval": state.current_interval_label,
+        "price_dkk_kwh": state.current_price,
+        "price_state": decision.get("price_state", ""),
+        "demand_w": state.current_demand_w,
+        "target_scenario": state.target_scenario,
+        "actual_scenario": actual_scenario_from_mode(status.get("mode", "")),
+        "scenario_accepted": status.get("scenarioAccepted", ""),
+        "reject_reason": status.get("lastRejectReason", ""),
+        "scheduler_reason": decision.get("reason", ""),
+        "pv_power_w": status.get("PVpower", ""),
+        "load_power_w": status.get("Loadpower", ""),
+        "battery_soc_percent": status.get("batterySOC", ""),
+        "battery_energy_wh": status.get("batteryEnergyWh", ""),
+        "pem_hydrogen_est_ml": state.pem_hydrogen_ml,
+        "battery_voltage_v": status.get("batteryVoltage", ""),
+        "pem_voltage_v": status.get("pemrfcVoltage", ""),
+        "command": state.current_command,
+    }
+
+    with Path(state.log_file).open("a", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=LOG_FIELDS)
+        writer.writerow(row)
+
+    logged_slots.add(key)
+    state.last_log_update = get_now().isoformat(timespec="seconds")
+
+
 def publish_state(push_bridge=True):
     with state_lock:
         update_current_inputs()
@@ -187,6 +281,8 @@ def publish_state(push_bridge=True):
                 run_scheduler_decision()
                 push_price_to_mcu()
                 push_scenario_to_mcu(state.current_command)
+                state.apply_arduino_status(fetch_arduino_status())
+                log_current_slot()
                 state.bridge_ok = True
                 state.last_error = ""
             except Exception as e:
@@ -205,6 +301,7 @@ def ems_loop():
     state.demo_started_at = time.monotonic()
 
     refresh_inputs()
+    start_demo_log()
 
     last_slot = None
 
@@ -262,6 +359,7 @@ def on_price_control(client_id, data):
             state.demo_started_at = time.monotonic()
             state.demo_cycle = 0
             update_current_inputs()
+            start_demo_log()
         publish_state(push_bridge=True)
 
     else:

@@ -1,5 +1,5 @@
-from app.python.data.weather import fetch_weather_forecast_for_today
-from app.python.data.pv import estimate_pv_forecast_96_slots, scale_pv_for_ems
+from app.python.forecast.weather import fetch_weather_forecast_for_today
+from app.python.forecast.pv import estimate_pv_forecast_96_slots, scale_pv_for_ems
 
 print("Starting PV test...")
 

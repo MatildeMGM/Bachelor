@@ -32,7 +32,14 @@ def parse_status_string(raw):
             result[key] = value
             continue
 
-        if key in ["hour", "slot", "priceReceived"]:
+        if key in [
+            "hour",
+            "slot",
+            "priceReceived",
+            "scenarioReceived",
+            "scenarioAccepted",
+            "requestedScenario",
+        ]:
             try:
                 result[key] = int(value)
             except ValueError:
@@ -71,4 +78,4 @@ def push_scenario_to_mcu(command):
     now_str = get_now().strftime("%H:%M:%S")
     print("[{}] SENDING SCENARIO TO MCU: {}".format(now_str, command))
 
-    Bridge.call("apply_scenario_frame", command, timeout=BRIDGE_TIMEOUT)
+    return Bridge.call("apply_scenario_frame", command, timeout=BRIDGE_TIMEOUT)
