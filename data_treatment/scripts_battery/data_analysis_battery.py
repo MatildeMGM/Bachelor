@@ -11,7 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BACHELOR_DIR = SCRIPT_DIR.parents[1]
 sys.path.append(str(BACHELOR_DIR / "data_treatment"))
 
-from plot_style import BLUE, GREEN, PURPLE, polish_axes, save_report_figure, set_report_style
+from data_treatment.plots.plot_style import BLUE, GREEN, PURPLE, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "Battery_test"
 

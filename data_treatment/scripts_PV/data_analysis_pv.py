@@ -23,7 +23,7 @@ def find_bachelor_dir():
 BACHELOR_DIR = find_bachelor_dir()
 sys.path.append(str(BACHELOR_DIR / "data_treatment"))
 
-from plot_style import DISTANCE_COLORS, GREEN, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
+from data_treatment.plots.plot_style import DISTANCE_COLORS, GREEN, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "PV_test" / "New_test"
 OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_PV"

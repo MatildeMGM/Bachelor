@@ -21,7 +21,7 @@ PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.append(str(BACHELOR_DIR / "data_treatment"))
 
-from plot_style import GREY, SENSOR_COLORS, polish_axes, save_report_figure, set_report_style
+from data_treatment.plots.plot_style import GREY, SENSOR_COLORS, polish_axes, save_report_figure, set_report_style
 
 
 loads = ["0", "220", "2x220", "3x220", "4x220"]

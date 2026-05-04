@@ -21,7 +21,7 @@ PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.append(str(BACHELOR_DIR / "data_treatment"))
 
-from plot_style import GREY, LIGHT_BLUE, polish_axes, save_report_figure, set_report_style
+from data_treatment.plots.plot_style import GREY, LIGHT_BLUE, polish_axes, save_report_figure, set_report_style
 
 
 ref = np.array([0.000, 14.910, 29.220, 43.300, 55.300])
