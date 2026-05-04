@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
@@ -8,6 +9,9 @@ import matplotlib.pyplot as plt
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 BACHELOR_DIR = SCRIPT_DIR.parents[1]
+sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+
+from plot_style import BLUE, GREEN, PURPLE, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "Battery_test"
 
@@ -184,61 +188,82 @@ def make_battery_state_table(discharge_df):
         avg_discharge_power_W=("power_W", "mean"),
     ).reset_index()
 
+    state_table["ems_state"] = state_table["battery_state"].map({
+        "EMPTY": "LOW",
+        "LOW": "LOW",
+        "MEDIUM": "MEDIUM",
+        "HIGH": "HIGH",
+        "FULL": "HIGH",
+    })
+
     return state_table
 
 
 def plot_charge(df):
-    fig, ax1 = plt.subplots()
+    set_report_style()
+    fig, ax1 = plt.subplots(figsize=(8.0, 4.8))
 
-    ax1.plot(df["elapsed_s"], df["voltage_V"], label="Voltage")
+    ax1.plot(df["elapsed_s"] / 60, df["voltage_V"], color=BLUE, label="Voltage")
     ax1.set_xlabel("Time [s]")
     ax1.set_ylabel("Voltage [V]")
 
     ax2 = ax1.twinx()
-    ax2.plot(df["elapsed_s"], df["current_A"] * 1000, label="Current")
+    ax2.plot(df["elapsed_s"] / 60, df["current_A"] * 1000, color=GREEN, label="Current")
     ax2.set_ylabel("Current [mA]")
+    ax1.set_xlabel("Time [min]")
+    ax1.set_title("Battery Charge Test")
 
-    plt.title("Battery charge test")
-    fig.tight_layout()
-    plt.savefig(PLOT_DIR / "battery_charge_voltage_current.png", dpi=300)
-    plt.close()
+    lines = ax1.get_lines() + ax2.get_lines()
+    labels = [line.get_label() for line in lines]
+    ax1.legend(lines, labels, loc="best")
+    polish_axes(ax1)
+    ax2.grid(False)
+    save_report_figure(fig, PLOT_DIR / "battery_charge_voltage_current.png")
 
 
 def plot_discharge_vs_soc(df):
+    set_report_style()
     df = add_discharge_energy_columns(df)
 
-    plt.figure()
-    plt.plot(df["soc_energy_percent"], df["voltage_V"], label="Voltage")
-    plt.gca().invert_xaxis()
-    plt.xlabel("Normalized SOC [%]")
-    plt.ylabel("Voltage [V]")
-    plt.title("Battery voltage during discharge")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "battery_voltage_vs_soc.png", dpi=300)
-    plt.close()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    ax.plot(df["soc_energy_percent"], df["voltage_V"], color=BLUE, label="Voltage")
+    ax.invert_xaxis()
+    ax.set_xlabel("State of charge [%]")
+    ax.set_ylabel("Voltage [V]")
+    ax.set_title("Battery Voltage During Discharge")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "battery_voltage_vs_soc.png")
 
-    plt.figure()
-    plt.plot(df["soc_energy_percent"], df["current_A"] * 1000, label="Current")
-    plt.gca().invert_xaxis()
-    plt.xlabel("Normalized SOC [%]")
-    plt.ylabel("Current [mA]")
-    plt.title("Battery current during discharge")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "battery_current_vs_soc.png", dpi=300)
-    plt.close()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    ax.plot(
+        df["soc_energy_percent"],
+        -df["current_A"] * 1000,
+        color=GREEN,
+        label="Discharge current",
+    )
+    ax.invert_xaxis()
+    ax.set_xlabel("State of charge [%]")
+    ax.set_ylabel("Current [mA]")
+    ax.set_title("Battery Discharge Current")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "battery_current_vs_soc.png")
 
-    plt.figure()
-    plt.plot(df["soc_energy_percent"], df["power_W"] * 1000, label="Power")
-    plt.gca().invert_xaxis()
-    plt.xlabel("Normalized SOC [%]")
-    plt.ylabel("Power [mW]")
-    plt.title("Battery power during discharge")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "battery_power_vs_soc.png", dpi=300)
-    plt.close()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    ax.plot(
+        df["soc_energy_percent"],
+        -df["power_W"] * 1000,
+        color=PURPLE,
+        label="Discharge power",
+    )
+    ax.invert_xaxis()
+    ax.set_xlabel("State of charge [%]")
+    ax.set_ylabel("Power [mW]")
+    ax.set_title("Battery Discharge Power")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "battery_power_vs_soc.png")
 
 
 def main():

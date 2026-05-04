@@ -40,6 +40,8 @@ class BatteryLimits:
     full_voltage_v: float
     usable_energy_wh: float
     max_discharge_power_w: float
+    medium_soc_percent: float
+    high_soc_percent: float
     reserve_soc_percent: float = 20.0
     full_soc_percent: float = 90.0
 
@@ -50,6 +52,8 @@ class PEMLimits:
     min_hydrogen_ml: float
     max_discharge_power_w: float
     full_hydrogen_ml: float
+    medium_hydrogen_ml: float
+    high_hydrogen_ml: float
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,8 @@ class PVLimits:
     max_power_w: float
     min_load_power_w: float
     min_charging_power_w: float
+    medium_power_w: float
+    high_power_w: float
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,15 @@ class EMSLimits:
     battery: BatteryLimits
     pem: PEMLimits
     pv: PVLimits
+
+
+@dataclass(frozen=True)
+class EMSInputStates:
+    price: str
+    demand: str
+    pv: str
+    battery: str
+    pem: str
 
 
 @dataclass
@@ -106,6 +121,50 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
     pem_sweep = pd.read_csv(base / "processed_PEM" / "current_sweep_summary.csv").iloc[0]
 
     pv_params = pd.read_csv(base / "processed_PV" / "pv_control_parameters.csv").iloc[0]
+    pv_state = pd.read_csv(base / "processed_PV" / "pv_state_table.csv")
+
+    battery_medium_soc = _state_min(
+        battery_state,
+        state_column="ems_state",
+        state_value="MEDIUM",
+        value_column="soc_min_percent",
+        default=40.0,
+    )
+    battery_high_soc = _state_min(
+        battery_state,
+        state_column="ems_state",
+        state_value="HIGH",
+        value_column="soc_min_percent",
+        default=60.0,
+    )
+    pem_medium_hydrogen = _state_min(
+        pem_state,
+        state_column="ems_state",
+        state_value="MEDIUM",
+        value_column="hydrogen_volume_mL",
+        default=float(pem_params["minimum_hydrogen_level_for_discharge_mL"]),
+    )
+    pem_high_hydrogen = _state_min(
+        pem_state,
+        state_column="ems_state",
+        state_value="HIGH",
+        value_column="hydrogen_volume_mL",
+        default=0.65 * float(pd.to_numeric(pem_state["hydrogen_volume_mL"], errors="coerce").max()),
+    )
+    pv_medium_power_w = _state_min(
+        pv_state,
+        state_column="ems_state",
+        state_value="MEDIUM",
+        value_column="avg_power_mW",
+        default=float(pv_params["min_usable_power_for_charging_mW"]),
+    ) / 1000.0
+    pv_high_power_w = _state_min(
+        pv_state,
+        state_column="ems_state",
+        state_value="HIGH",
+        value_column="avg_power_mW",
+        default=float(pv_params["min_usable_power_for_load_mW"]),
+    ) / 1000.0
 
     return EMSLimits(
         battery=BatteryLimits(
@@ -113,6 +172,8 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
             full_voltage_v=4.2,
             usable_energy_wh=float(battery_discharge["usable_energy_Wh"]),
             max_discharge_power_w=float(battery_discharge["max_discharge_power_W"]),
+            medium_soc_percent=battery_medium_soc,
+            high_soc_percent=battery_high_soc,
         ),
         pem=PEMLimits(
             min_voltage_v=float(pem_params["minimum_usable_fuel_cell_voltage_V"]),
@@ -121,6 +182,8 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
             full_hydrogen_ml=float(
                 pd.to_numeric(pem_state["hydrogen_volume_mL"], errors="coerce").max()
             ),
+            medium_hydrogen_ml=pem_medium_hydrogen,
+            high_hydrogen_ml=pem_high_hydrogen,
         ),
         pv=PVLimits(
             min_voltage_v=float(pv_params["min_pv_voltage_V"]),
@@ -130,6 +193,8 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
                 pv_params["min_usable_power_for_charging_mW"]
             )
             / 1000.0,
+            medium_power_w=pv_medium_power_w,
+            high_power_w=pv_high_power_w,
         ),
     )
 
@@ -162,13 +227,23 @@ def decide_current_scenario(
     price_now = prices_96[current_slot]
     demand_now_w = demand_96[current_slot]
     pv_now_w = estimate_live_pv_power_w(component_state, limits)
-    price_state = classify_price(price_now, prices_96, config)
 
     # The battery reserve is based on upcoming expensive demand.
     reserve_soc = calculate_battery_reserve_soc(
         prices_96=prices_96,
         demand_96=demand_96,
         current_slot=current_slot,
+        limits=limits,
+        config=config,
+    )
+    input_states = classify_inputs(
+        price_now=price_now,
+        prices_96=prices_96,
+        demand_now_w=demand_now_w,
+        demand_96=demand_96,
+        pv_w=pv_now_w,
+        reserve_soc_percent=reserve_soc,
+        component_state=component_state,
         limits=limits,
         config=config,
     )
@@ -181,7 +256,7 @@ def decide_current_scenario(
         limits=limits,
         config=config,
     )
-    scenario, reason = choose_best_scenario(eligible, price_state)
+    scenario, reason = choose_best_scenario(eligible, input_states)
 
     if (
         scenario != component_state.last_scenario
@@ -202,7 +277,18 @@ def decide_current_scenario(
     return {
         "slot": current_slot,
         "price": price_now,
-        "price_state": price_state,
+        "price_state": input_states.price,
+        "demand_state": input_states.demand,
+        "pv_state": input_states.pv,
+        "battery_state": input_states.battery,
+        "pem_state": input_states.pem,
+        "input_states": {
+            "price": input_states.price,
+            "demand": input_states.demand,
+            "pv": input_states.pv,
+            "battery": input_states.battery,
+            "pem": input_states.pem,
+        },
         "demand_w": demand_now_w,
         "live_pv_w": pv_now_w,
         "battery_reserve_soc_percent": reserve_soc,
@@ -251,6 +337,94 @@ def classify_price(
         return "high"
     if price <= low:
         return "low"
+    return "medium"
+
+
+def classify_inputs(
+    *,
+    price_now: float,
+    prices_96: list[float],
+    demand_now_w: float,
+    demand_96: list[float],
+    pv_w: float,
+    reserve_soc_percent: float,
+    component_state: ComponentState,
+    limits: EMSLimits,
+    config: SchedulerConfig,
+) -> EMSInputStates:
+    """Convert all scheduler inputs into the same low/medium/high language."""
+
+    return EMSInputStates(
+        price=classify_price(price_now, prices_96, config),
+        demand=classify_demand(demand_now_w, demand_96),
+        pv=classify_pv(pv_w, demand_now_w, limits, config),
+        battery=classify_battery(component_state, reserve_soc_percent, limits),
+        pem=classify_pem(component_state, limits),
+    )
+
+
+def classify_demand(demand_w: float, demand_96: list[float]) -> str:
+    """Classify demand compared with the daily load profile."""
+
+    low = float(np.quantile(demand_96, 0.35))
+    high = float(np.quantile(demand_96, 0.70))
+    return _low_medium_high(demand_w, low, high)
+
+
+def classify_pv(
+    pv_w: float,
+    demand_w: float,
+    limits: EMSLimits,
+    config: SchedulerConfig,
+) -> str:
+    """Classify live PV availability from the measured PV power."""
+
+    if pv_w < limits.pv.min_charging_power_w:
+        return "low"
+    if pv_w < max(limits.pv.high_power_w, demand_w + config.safety_margin_w):
+        return "medium"
+    return "high"
+
+
+def classify_battery(
+    component_state: ComponentState,
+    reserve_soc_percent: float,
+    limits: EMSLimits,
+) -> str:
+    """Classify battery availability while keeping the reserve as low state."""
+
+    if (
+        component_state.battery_voltage_v < limits.battery.min_voltage_v
+        or component_state.battery_soc_percent <= reserve_soc_percent
+    ):
+        return "low"
+
+    if component_state.battery_soc_percent >= limits.battery.high_soc_percent:
+        return "high"
+    return "medium"
+
+
+def classify_pem(component_state: ComponentState, limits: EMSLimits) -> str:
+    """Classify estimated PEM hydrogen availability."""
+
+    if (
+        component_state.pem_voltage_v < limits.pem.min_voltage_v
+        or component_state.pem_hydrogen_ml < limits.pem.min_hydrogen_ml
+    ):
+        return "low"
+
+    if component_state.pem_hydrogen_ml >= limits.pem.high_hydrogen_ml:
+        return "high"
+    return "medium"
+
+
+def _low_medium_high(value: float, low_limit: float, high_limit: float) -> str:
+    if np.isclose(low_limit, high_limit):
+        return "medium"
+    if value <= low_limit:
+        return "low"
+    if value >= high_limit:
+        return "high"
     return "medium"
 
 
@@ -332,26 +506,29 @@ def get_eligible_scenarios(
     return eligible
 
 
-def choose_best_scenario(eligible: set[int], price_state: str) -> tuple[int, str]:
+def choose_best_scenario(
+    eligible: set[int],
+    input_states: EMSInputStates,
+) -> tuple[int, str]:
     """Choose one scenario from the safe candidates."""
 
-    if price_state == "high":
+    if input_states.price == "high":
         priority = [
-            (4, "high price: use live PV if it can cover load"),
-            (5, "high price: use battery while reserve allows it"),
-            (6, "high price: use PEM for small loads"),
-            (1, "high price: no local source can safely cover load"),
+            (4, "high price, PV available: use live PV for the load"),
+            (5, "high price, battery available: discharge battery"),
+            (6, "high price, PEM available: use PEM for small load"),
+            (1, "high price, local sources low: safe grid fallback"),
         ]
-    elif price_state == "low":
+    elif input_states.price == "low":
         priority = [
-            (2, "low price: grid supplies load while PV charges battery"),
-            (3, "low price: battery is not priority, PV charges PEM"),
-            (4, "low price: PV can cover load directly"),
-            (1, "low price: grid fallback"),
+            (2, "low price, PV available: grid supplies load while PV charges battery"),
+            (3, "low price, battery not charging: PV charges PEM"),
+            (4, "low price, PV available: PV can cover load directly"),
+            (1, "low price: safe grid fallback"),
         ]
     else:
         priority = [
-            (4, "medium price: use PV directly if available"),
+            (4, "medium price, PV available: use PV directly"),
             (1, "medium price: save stored energy"),
         ]
 
@@ -404,3 +581,23 @@ def _as_96_values(values: Iterable[float], name: str) -> list[float]:
         raise ValueError(f"{name} must contain 24 or 96 values, got {len(values)}.")
 
     return values
+
+
+def _state_min(
+    table: pd.DataFrame,
+    *,
+    state_column: str,
+    state_value: str,
+    value_column: str,
+    default: float,
+) -> float:
+    if state_column not in table.columns or value_column not in table.columns:
+        return float(default)
+
+    rows = table[table[state_column].astype(str).str.upper() == state_value]
+    values = pd.to_numeric(rows[value_column], errors="coerce").dropna()
+
+    if values.empty:
+        return float(default)
+
+    return float(values.min())

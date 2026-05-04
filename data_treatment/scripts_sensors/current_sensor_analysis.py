@@ -1,7 +1,8 @@
 from pathlib import Path
+import sys
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def find_bachelor_dir():
@@ -18,21 +19,12 @@ BACHELOR_DIR = find_bachelor_dir()
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "sensor_plots"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
+sys.path.append(str(BACHELOR_DIR / "data_treatment"))
 
-plt.style.use("seaborn-v0_8-whitegrid")
-
-plt.rcParams.update({
-    "font.size": 14,
-    "axes.titlesize": 16,
-    "axes.labelsize": 14,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12,
-    "legend.fontsize": 12,
-    "figure.titlesize": 18,
-})
+from plot_style import GREY, SENSOR_COLORS, polish_axes, save_report_figure, set_report_style
 
 
-loads = ["0", "220", "2×220", "3×220", "4×220"]
+loads = ["0", "220", "2x220", "3x220", "4x220"]
 x = np.arange(len(loads))
 
 data = {
@@ -56,23 +48,13 @@ data = {
 
 
 def plot_current_correction():
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9), sharex=True, sharey=True)
+    set_report_style()
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8.5), sharex=True, sharey=True)
     axes = axes.flatten()
-
-    raw_color = "#9aa0a6"
-
-    corr_colors = {
-        "Sensor 40": "#4c78a8",
-        "Sensor 41": "#54a24b",
-        "Sensor 44": "#f28e2b",
-        "Sensor 45": "#e15759",
-    }
 
     for ax, (sensor, values) in zip(axes, data.items()):
         I_ref = values["I_ref"]
         I_ina = values["I_ina"]
-
-        corr_color = corr_colors[sensor]
         raw_error = I_ina - I_ref
 
         if sensor == "Sensor 45":
@@ -86,75 +68,45 @@ def plot_current_correction():
 
         corr_error = I_corr - I_ref
 
-        ax.plot(x, raw_error, "o-", linewidth=2.2, color=raw_color, label="Raw measurement error")
-        ax.plot(x, corr_error, "o--", linewidth=2, color=corr_color, label="Corrected error")
+        ax.plot(x, raw_error, "o-", color=GREY, label="Raw error")
+        ax.plot(x, corr_error, "o--", color=SENSOR_COLORS[sensor], label="Corrected error")
+        ax.axhline(0, linestyle="--", color="#243447", alpha=0.7, linewidth=1)
 
-        ax.axhline(0, linestyle="--", color="black", alpha=0.7)
-
-        ax.set_title(f"{sensor}\n{title_eq}", fontweight="bold")
+        ax.set_title(f"{sensor}\n{title_eq}")
         ax.set_xticks(x)
         ax.set_xticklabels(loads)
-
-        ax.grid(True, linestyle="--", alpha=0.4)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
+        polish_axes(ax)
         ax.legend(loc="upper left")
 
-    axes[0].set_ylabel("Absolute error [mA]")
-    axes[2].set_ylabel("Absolute error [mA]")
+    axes[0].set_ylabel("Current error [mA]")
+    axes[2].set_ylabel("Current error [mA]")
     axes[2].set_xlabel("Load configuration")
     axes[3].set_xlabel("Load configuration")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-    save_path = PLOT_DIR / "current_correction.png"
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-
-    plt.show()
+    save_report_figure(fig, PLOT_DIR / "current_correction.png")
 
 
 def plot_current_abs_error():
-    colors = [
-        "#6B8FBF",
-        "#7FB77E",
-        "#E6A157",
-        "#D67272",
-    ]
+    set_report_style()
+    fig, ax = plt.subplots()
 
-    fig, ax = plt.subplots(figsize=(9, 5.2))
-
-    for (sensor, values), color in zip(data.items(), colors):
+    for sensor, values in data.items():
         I_ref = values["I_ref"]
         I_ina = values["I_ina"]
-
         abs_error = I_ina - I_ref
 
-        ax.plot(
-            x,
-            abs_error,
-            "o-",
-            linewidth=2,
-            markersize=6,
-            color=color,
-            label=sensor,
-        )
+        ax.plot(x, abs_error, "o-", color=SENSOR_COLORS[sensor], label=sensor)
 
     ax.set_xticks(x)
     ax.set_xticklabels(loads)
-
     ax.set_xlabel("Load configuration")
-    ax.set_ylabel("Absolute current error [mA]")
-
-    ax.axhline(0, linestyle="--", color="black", alpha=0.7)
+    ax.set_ylabel("Current error [mA]")
+    ax.set_title("INA226 Current Measurement Error")
+    ax.axhline(0, linestyle="--", color="#243447", alpha=0.7, linewidth=1)
+    polish_axes(ax)
     ax.legend()
 
-    plt.tight_layout()
-
-    save_path = PLOT_DIR / "Current_abs_error.png"
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-
-    plt.show()
+    save_report_figure(fig, PLOT_DIR / "Current_abs_error.png")
 
 
 def main():

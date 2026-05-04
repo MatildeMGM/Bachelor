@@ -5,6 +5,7 @@ Extracts operating thresholds and creates PV state characterization
 """
 
 from pathlib import Path
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -20,6 +21,10 @@ def find_bachelor_dir():
 
 
 BACHELOR_DIR = find_bachelor_dir()
+sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+
+from plot_style import DISTANCE_COLORS, GREEN, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
+
 DATA_DIR = BACHELOR_DIR / "data" / "PV_test" / "New_test"
 OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_PV"
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "pv_plots"
@@ -174,78 +179,49 @@ def analyze_all_tests():
 
 def create_pv_state_table(summary_df):
     """
-    Create a PV state table categorizing light intensity levels
-    based on power output and voltage characteristics.
+    Create three EMS PV states from the controlled lamp distance tests.
+
+    The distance ranges are only used to define the laboratory states. During
+    operation, the EMS still classifies PV from the live voltage/current/power.
     """
-    # Sort by distance (closer = higher intensity)
-    summary_df = summary_df.sort_values("distance_cm")
-    
-    # Define light intensity states based on power output
-    # Using quartiles of available power as state boundaries
-    power_values = summary_df["ss_avg_power_mW"].values
-    
-    # Define state boundaries
+    summary_df = summary_df.sort_values("distance_cm").copy()
+
+    state_ranges = [
+        ("HIGH", 0.0, 5.0),
+        ("MEDIUM", 5.0, 12.5),
+        ("LOW", 12.5, 20.0),
+    ]
+
     states = []
-    
-    # Very low/dim light
-    states.append({
-        "light_state": "DIM",
-        "distance_cm": 20,
-        "min_distance_cm": 17,
-        "max_distance_cm": 20,
-        "avg_voltage_V": summary_df[summary_df["distance_cm"] == 20]["ss_avg_voltage_V"].values[0],
-        "avg_power_mW": summary_df[summary_df["distance_cm"] == 20]["ss_avg_power_mW"].values[0],
-        "max_current_A": summary_df[summary_df["distance_cm"] == 20]["ss_avg_current_A"].values[0],
-    })
-    
-    # Low light
-    if (summary_df["distance_cm"] == 15).any():
+    for state_name, min_distance, max_distance in state_ranges:
+        if state_name == "HIGH":
+            mask = (
+                (summary_df["distance_cm"] >= min_distance)
+                & (summary_df["distance_cm"] <= max_distance)
+            )
+        else:
+            mask = (
+                (summary_df["distance_cm"] > min_distance)
+                & (summary_df["distance_cm"] <= max_distance)
+            )
+
+        group = summary_df[mask]
+        if group.empty:
+            continue
+
         states.append({
-            "light_state": "LOW",
-            "distance_cm": 15,
-            "min_distance_cm": 12,
-            "max_distance_cm": 18,
-            "avg_voltage_V": summary_df[summary_df["distance_cm"] == 15]["ss_avg_voltage_V"].values[0],
-            "avg_power_mW": summary_df[summary_df["distance_cm"] == 15]["ss_avg_power_mW"].values[0],
-            "max_current_A": summary_df[summary_df["distance_cm"] == 15]["ss_avg_current_A"].values[0],
+            "light_state": state_name,
+            "ems_state": state_name,
+            "min_distance_cm": min_distance,
+            "max_distance_cm": max_distance,
+            "test_distances_cm": ", ".join(str(int(value)) for value in group["distance_cm"]),
+            "avg_voltage_V": group["ss_avg_voltage_V"].mean(),
+            "min_power_mW": group["ss_avg_power_mW"].min(),
+            "avg_power_mW": group["ss_avg_power_mW"].mean(),
+            "max_power_mW": group["ss_avg_power_mW"].max(),
+            "max_current_A": group["ss_avg_current_A"].max(),
         })
-    
-    # Medium light
-    if (summary_df["distance_cm"] == 10).any():
-        states.append({
-            "light_state": "MEDIUM",
-            "distance_cm": 10,
-            "min_distance_cm": 8,
-            "max_distance_cm": 12,
-            "avg_voltage_V": summary_df[summary_df["distance_cm"] == 10]["ss_avg_voltage_V"].values[0],
-            "avg_power_mW": summary_df[summary_df["distance_cm"] == 10]["ss_avg_power_mW"].values[0],
-            "max_current_A": summary_df[summary_df["distance_cm"] == 10]["ss_avg_current_A"].values[0],
-        })
-    
-    # High light
-    if (summary_df["distance_cm"] == 5).any():
-        states.append({
-            "light_state": "HIGH",
-            "distance_cm": 5,
-            "min_distance_cm": 3,
-            "max_distance_cm": 8,
-            "avg_voltage_V": summary_df[summary_df["distance_cm"] == 5]["ss_avg_voltage_V"].values[0],
-            "avg_power_mW": summary_df[summary_df["distance_cm"] == 5]["ss_avg_power_mW"].values[0],
-            "max_current_A": summary_df[summary_df["distance_cm"] == 5]["ss_avg_current_A"].values[0],
-        })
-    
-    # Very high/bright light
-    if (summary_df["distance_cm"] == 1).any():
-        states.append({
-            "light_state": "BRIGHT",
-            "distance_cm": 1,
-            "min_distance_cm": 0,
-            "max_distance_cm": 3,
-            "avg_voltage_V": summary_df[summary_df["distance_cm"] == 1]["ss_avg_voltage_V"].values[0],
-            "avg_power_mW": summary_df[summary_df["distance_cm"] == 1]["ss_avg_power_mW"].values[0],
-            "max_current_A": summary_df[summary_df["distance_cm"] == 1]["ss_avg_current_A"].values[0],
-        })
-    
+
     return pd.DataFrame(states)
 
 
@@ -277,54 +253,101 @@ def create_operating_thresholds(summary_df, state_table):
 
 
 def generate_plots(summary_df, state_table):
-    """Generate visualization plots"""
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    """Generate report-ready PV characterization plots."""
+    set_report_style()
+    summary_df = summary_df.sort_values("distance_cm")
     
-    # Plot 1: Power vs Distance
-    ax = axes[0, 0]
-    ax.plot(summary_df["distance_cm"], summary_df["ss_avg_power_mW"], 'bo-', label='Avg Power')
-    ax.fill_between(summary_df["distance_cm"], 
-                     summary_df["ss_min_power_mW"],
-                     summary_df["ss_max_power_mW"],
-                     alpha=0.3, label='Min-Max Range')
-    ax.set_xlabel('Distance (cm)')
-    ax.set_ylabel('Power (mW)')
-    ax.set_title('PV Power Output vs Light Intensity (Distance)')
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    ax.plot(
+        summary_df["distance_cm"],
+        summary_df["ss_avg_power_mW"],
+        marker="o",
+        color=BLUE,
+        label="Steady-state power",
+    )
+    ax.fill_between(
+        summary_df["distance_cm"],
+        summary_df["ss_min_power_mW"],
+        summary_df["ss_max_power_mW"],
+        color=BLUE,
+        alpha=0.16,
+        label="Observed range",
+    )
+    ax.invert_xaxis()
+    ax.set_xlabel("Lamp distance [cm]")
+    ax.set_ylabel("PV power [mW]")
+    ax.set_title("PV Power Under Different Illumination Levels")
+    ax.legend(loc="upper right")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pv_power_vs_distance.png")
     
-    # Plot 2: Voltage vs Distance
-    ax = axes[0, 1]
-    ax.plot(summary_df["distance_cm"], summary_df["ss_avg_voltage_V"], 'go-')
-    ax.set_xlabel('Distance (cm)')
-    ax.set_ylabel('Voltage (V)')
-    ax.set_title('PV Voltage vs Light Intensity')
-    ax.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    ax.plot(
+        summary_df["distance_cm"],
+        summary_df["ss_avg_voltage_V"],
+        marker="o",
+        color=GREEN,
+        label="Steady-state voltage",
+    )
+    ax.invert_xaxis()
+    ax.set_xlabel("Lamp distance [cm]")
+    ax.set_ylabel("PV voltage [V]")
+    ax.set_title("PV Voltage Under Different Illumination Levels")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pv_voltage_vs_distance.png")
     
-    # Plot 3: Current vs Distance
-    ax = axes[1, 0]
-    ax.plot(summary_df["distance_cm"], summary_df["ss_avg_current_A"], 'ro-')
-    ax.set_xlabel('Distance (cm)')
-    ax.set_ylabel('Current (A)')
-    ax.set_title('PV Current vs Light Intensity')
-    ax.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    ax.plot(
+        summary_df["distance_cm"],
+        summary_df["ss_avg_current_A"] * 1000,
+        marker="o",
+        color=PURPLE,
+        label="Steady-state current",
+    )
+    ax.invert_xaxis()
+    ax.set_xlabel("Lamp distance [cm]")
+    ax.set_ylabel("PV current [mA]")
+    ax.set_title("PV Current Under Different Illumination Levels")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pv_current_vs_distance.png")
     
-    # Plot 4: State Table Summary
-    ax = axes[1, 1]
-    ax.axis('off')
-    state_text = "PV Light States:\n\n"
-    for idx, row in state_table.iterrows():
-        state_text += f"{row['light_state']}:\n"
-        state_text += f"  Dist: {row['distance_cm']} cm\n"
-        state_text += f"  Power: {row['avg_power_mW']:.1f} mW\n"
-        state_text += f"  Voltage: {row['avg_voltage_V']:.2f} V\n\n"
-    ax.text(0.1, 0.5, state_text, fontsize=10, family='monospace',
-            verticalalignment='center')
-    
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pv_analysis_summary.png", dpi=150)
-    print(f"Saved plot to {PLOT_DIR / 'pv_analysis_summary.png'}")
-    plt.close()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    state_colors = {
+        "LOW": BLUE,
+        "MEDIUM": GREEN,
+        "HIGH": PURPLE,
+    }
+    state_order = ["LOW", "MEDIUM", "HIGH"]
+    state_table = state_table.set_index("ems_state").loc[state_order].reset_index()
+    x = np.arange(len(state_table))
+
+    for index, row in state_table.iterrows():
+        state = row["ems_state"]
+        color = state_colors.get(state, BLUE)
+        ax.errorbar(
+            index,
+            row["avg_power_mW"],
+            yerr=[
+                [row["avg_power_mW"] - row["min_power_mW"]],
+                [row["max_power_mW"] - row["avg_power_mW"]],
+            ],
+            fmt="o",
+            markersize=9,
+            capsize=7,
+            color=color,
+            label=f"{state}: {row['min_distance_cm']:.1f}-{row['max_distance_cm']:.1f} cm",
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(state_order)
+    ax.set_xlabel("EMS PV state")
+    ax.set_ylabel("PV power [mW]")
+    ax.set_title("PV Operating States Used by the EMS")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pv_operating_states.png")
 
 
 def main():

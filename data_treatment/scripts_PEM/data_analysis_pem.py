@@ -1,9 +1,11 @@
 from pathlib import Path
 import re
+import sys
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 
 def find_bachelor_dir():
@@ -17,6 +19,9 @@ def find_bachelor_dir():
 
 
 BACHELOR_DIR = find_bachelor_dir()
+sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+
+from plot_style import CURRENT_COLORS, BLUE, GREEN, PURPLE, GREY, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "PEM_test"
 CHARGE_DISCHARGE_DIR = DATA_DIR / "charge_discharge"
@@ -368,9 +373,18 @@ def make_state_table(summary):
             duplicates="drop"
         )
 
+    table["ems_state"] = table["pem_state"].map({
+        "EMPTY": "LOW",
+        "LOW": "LOW",
+        "MEDIUM": "MEDIUM",
+        "HIGH": "HIGH",
+        "FULL": "HIGH",
+    })
+
     return table[
         [
             "pem_state",
+            "ems_state",
             "charge_current_setpoint_A",
             "charge_duration_setpoint_s",
             "hydrogen_volume_mL",
@@ -414,186 +428,251 @@ def make_control_parameters(summary, sweep_summary, cutoff_voltage):
 
 
 def get_plot_color(current_a, duration_s):
-    color_map = {
-        30: ["#FFCCBC", "#FFAB91", "#FF8A65"],
-        60: ["#B2DFDB", "#80CBC4", "#4DB6AC"],
-        120: ["#E1BEE7", "#CE93D8", "#BA68C8"],
-    }
-
-    colors = color_map.get(duration_s, ["#D0D0D0", "#A0A0A0", "#707070"])
-
-    if current_a == 0.2:
-        color_idx = 0
-    elif current_a == 0.3:
-        color_idx = 1
-    else:
-        color_idx = 2
-
-    return colors[color_idx % len(colors)]
+    return CURRENT_COLORS.get(round(float(current_a), 1), BLUE)
 
 
-def plot_charge_power():
-    plt.figure(figsize=(10, 6))
+def get_duration_alpha(duration_s):
+    if duration_s == 30:
+        return 0.45
+    if duration_s == 60:
+        return 0.70
+    return 1.00
 
+
+THRESHOLD_GREY = "#4A4A4A"
+
+
+def add_pem_curve_legend(ax, curve_handles, cutoff_handle=None):
+    legend_handles = curve_handles.copy()
+    if cutoff_handle is not None:
+        legend_handles.append(cutoff_handle)
+
+    ax.legend(
+        handles=legend_handles,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        ncol=1,
+        borderaxespad=0,
+    )
+
+
+def collect_charge_discharge_curves():
     plot_data = []
 
     for file_path in CHARGE_DISCHARGE_DIR.glob("*.csv"):
         try:
             current_a, duration_s, _ = extract_test_info(file_path)
-            
+
             # Skip files that don't match the expected naming pattern
             if current_a is None or duration_s is None:
                 continue
-                
+
             df = read_log(file_path)
-            charge, _ = split_charge_discharge(df, duration_s)
+            charge, discharge = split_charge_discharge(df, duration_s)
         except ValueError as error:
             print(f"Skipping {file_path.name}: {error}")
             continue
 
-        if len(charge) > 1:
-            plot_data.append((duration_s, current_a, charge, file_path))
+        if len(charge) > 1 and len(discharge) > 1:
+            plot_data.append((duration_s, current_a, charge, discharge, file_path))
 
-    plot_data.sort(key=lambda x: (x[0], x[1]))
+    return sorted(plot_data, key=lambda x: (x[1], x[0]))
 
-    for duration_s, current_a, charge, file_path in plot_data:
-        label = f"{int(current_a * 1000)} mA in {duration_s} s"
+
+def plot_charge_power():
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(7.4, 4.8))
+
+    plot_data = collect_charge_discharge_curves()
+    curve_handles = []
+
+    for duration_s, current_a, charge, _, file_path in plot_data:
+        label = f"{int(current_a * 1000)} mA, {duration_s} s"
         color = get_plot_color(current_a, duration_s)
 
-        plt.plot(
+        line = ax.plot(
             charge["local_time_s"],
             np.maximum(charge["pem_power_W"], 0) * 1000,
             label=label,
             color=color,
-            linewidth=2
-        )
+            alpha=get_duration_alpha(duration_s),
+        )[0]
+        curve_handles.append(line)
 
-    plt.xlabel("Time [s]", fontsize=12)
-    plt.ylabel("Input power [mW]", fontsize=12)
-    plt.title("PEM charging power", fontsize=14)
-    plt.legend(fontsize=9, loc='best')
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pem_charging_power.png", dpi=300)
-    plt.close()
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Input power [mW]")
+    ax.set_title("PEM Charging Power")
+    add_pem_curve_legend(ax, curve_handles)
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_charging_power.png")
 
 
 def plot_discharge_voltage(cutoff_voltage):
-    plt.figure(figsize=(10, 6))
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(7.4, 4.8))
 
-    plot_data = []
+    plot_data = collect_charge_discharge_curves()
+    curve_handles = []
 
-    for file_path in CHARGE_DISCHARGE_DIR.glob("*.csv"):
-        try:
-            current_a, duration_s, _ = extract_test_info(file_path)
-            
-            # Skip files that don't match the expected naming pattern
-            if current_a is None or duration_s is None:
-                continue
-                
-            df = read_log(file_path)
-            _, discharge = split_charge_discharge(df, duration_s)
-        except ValueError as error:
-            print(f"Skipping {file_path.name}: {error}")
-            continue
-
-        if len(discharge) > 1:
-            plot_data.append((duration_s, current_a, discharge, file_path))
-
-    plot_data.sort(key=lambda x: (x[0], x[1]))
-
-    for duration_s, current_a, discharge, file_path in plot_data:
-        label = f"{int(current_a * 1000)} mA in {duration_s} s"
+    for duration_s, current_a, _, discharge, file_path in plot_data:
+        label = f"{int(current_a * 1000)} mA, {duration_s} s"
         color = get_plot_color(current_a, duration_s)
 
-        plt.plot(
+        line = ax.plot(
             discharge["local_time_s"],
             discharge["pem_voltage_V"],
             label=label,
             color=color,
-            linewidth=2
-        )
+            alpha=get_duration_alpha(duration_s),
+        )[0]
+        curve_handles.append(line)
 
-    plt.axhline(
+    cutoff_handle = ax.axhline(
         cutoff_voltage,
-        color='blue',
-        linestyle='dotted',
-        linewidth=2,
-        label=f"Cutoff voltage: {cutoff_voltage:.3f} V"
+        color=THRESHOLD_GREY,
+        linestyle="--",
+        linewidth=1.8,
+        label=f"Cutoff: {cutoff_voltage:.3f} V",
     )
 
-    plt.xlabel("Time [s]", fontsize=12)
-    plt.ylabel("Voltage [V]", fontsize=12)
-    plt.title("PEM discharge voltage", fontsize=14)
-    plt.legend(fontsize=9, loc='best')
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pem_discharge_voltage.png", dpi=300)
-    plt.close()
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Voltage [V]")
+    ax.set_title("PEM Discharge Voltage")
+    add_pem_curve_legend(ax, curve_handles, cutoff_handle)
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_discharge_voltage.png")
+
+
+def plot_charge_discharge_subplot(cutoff_voltage):
+    set_report_style()
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8))
+    charge_ax, discharge_ax = axes
+    curve_handles = []
+
+    for duration_s, current_a, charge, discharge, _ in collect_charge_discharge_curves():
+        label = f"{int(current_a * 1000)} mA, {duration_s} s"
+        color = get_plot_color(current_a, duration_s)
+        alpha = get_duration_alpha(duration_s)
+
+        charge_line = charge_ax.plot(
+            charge["local_time_s"],
+            np.maximum(charge["pem_power_W"], 0) * 1000,
+            label=label,
+            color=color,
+            alpha=alpha,
+        )[0]
+        curve_handles.append(charge_line)
+
+        discharge_ax.plot(
+            discharge["local_time_s"],
+            discharge["pem_voltage_V"],
+            color=color,
+            alpha=alpha,
+        )
+
+    cutoff_handle = discharge_ax.axhline(
+        cutoff_voltage,
+        color=THRESHOLD_GREY,
+        linestyle="--",
+        linewidth=1.8,
+        label=f"Cutoff: {cutoff_voltage:.3f} V",
+    )
+
+    charge_ax.set_xlabel("Time [s]")
+    charge_ax.set_ylabel("Input power [mW]")
+    charge_ax.set_title("PEM Charging Power")
+    polish_axes(charge_ax)
+
+    discharge_ax.set_xlabel("Time [s]")
+    discharge_ax.set_ylabel("Voltage [V]")
+    discharge_ax.set_title("PEM Discharge Voltage")
+    polish_axes(discharge_ax)
+
+    blank = Line2D([], [], linestyle="none", label="")
+    legend_handles = curve_handles + [cutoff_handle, blank, blank]
+
+    fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.03),
+        ncol=4,
+        frameon=False,
+    )
+    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.30, wspace=0.28)
+    fig.savefig(PLOT_DIR / "pem_charge_discharge_subplot.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 
 def plot_output_energy(summary):
-    plt.figure()
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
     for current_a, group in summary.groupby("charge_current_setpoint_A"):
         group = group.sort_values("charge_duration_setpoint_s")
 
-        plt.plot(
+        ax.plot(
             group["charge_duration_setpoint_s"],
             group["output_energy_J"],
             marker="o",
-            label=f"{current_a:.2f} A"
+            color=get_plot_color(current_a, None),
+            label=f"{int(current_a * 1000)} mA"
         )
 
-    plt.xlabel("Charge duration [s]")
-    plt.ylabel("Output energy [J]")
-    plt.title("PEM output energy after charging")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pem_output_energy_vs_charge_time.png", dpi=300)
-    plt.close()
+    ax.set_xlabel("Charge duration [s]")
+    ax.set_ylabel("Output energy [J]")
+    ax.set_title("PEM Output Energy After Charging")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_output_energy_vs_charge_time.png")
 
 
 def plot_hydrogen_volume(summary):
-    plt.figure()
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
     for current_a, group in summary.groupby("charge_current_setpoint_A"):
         group = group.sort_values("charge_duration_setpoint_s")
 
-        plt.plot(
+        ax.plot(
             group["charge_duration_setpoint_s"],
             group["hydrogen_volume_mL"],
             marker="o",
-            label=f"{current_a:.2f} A"
+            color=get_plot_color(current_a, None),
+            label=f"{int(current_a * 1000)} mA"
         )
 
-    plt.xlabel("Charge duration [s]")
-    plt.ylabel("Hydrogen volume [mL]")
-    plt.title("Hydrogen production during charging")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pem_hydrogen_volume_vs_charge_time.png", dpi=300)
-    plt.close()
+    ax.set_xlabel("Charge duration [s]")
+    ax.set_ylabel("Hydrogen volume [mL]")
+    ax.set_title("Hydrogen Production During PEM Charging")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_hydrogen_volume_vs_charge_time.png")
 
 
 def plot_output_energy_vs_hydrogen(summary):
-    plt.figure()
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
-    plt.scatter(
-        summary["hydrogen_volume_mL"],
-        summary["output_energy_J"]
-    )
+    for current_a, group in summary.groupby("charge_current_setpoint_A"):
+        ax.scatter(
+            group["hydrogen_volume_mL"],
+            group["output_energy_J"],
+            s=70,
+            color=get_plot_color(current_a, None),
+            label=f"{int(current_a * 1000)} mA",
+        )
 
-    plt.xlabel("Hydrogen volume [mL]")
-    plt.ylabel("Output energy [J]")
-    plt.title("PEM output energy as function of hydrogen volume")
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pem_output_energy_vs_hydrogen_volume.png", dpi=300)
-    plt.close()
+    ax.set_xlabel("Hydrogen volume [mL]")
+    ax.set_ylabel("Output energy [J]")
+    ax.set_title("PEM Output Energy as Function of Hydrogen Volume")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_output_energy_vs_hydrogen_volume.png")
 
 
 def plot_sweep(cutoff_voltage):
-    plt.figure()
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
     for file_path in sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv")):
         try:
@@ -612,28 +691,36 @@ def plot_sweep(cutoff_voltage):
 
         sweep_grouped = sweep_grouped.sort_values("current_step_mA")
 
-        plt.plot(
+        ax.plot(
             sweep_grouped["current_step_mA"],
             sweep_grouped["voltage_mean_V"],
             marker="o",
-            markersize=4,
-            linewidth=2,
+            color=BLUE,
             label=file_path.stem
         )
 
-    plt.axhline(
+    ax.axhline(
         cutoff_voltage,
+        color=GREY,
         linestyle="dashed",
-        label=f"Empirical cutoff voltage: {cutoff_voltage:.3f} V"
+    )
+    ax.text(
+        0.98,
+        cutoff_voltage + 0.015,
+        f"Cutoff voltage: {cutoff_voltage:.3f} V",
+        color=GREY,
+        ha="right",
+        va="bottom",
+        transform=ax.get_yaxis_transform(),
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85, "pad": 2},
     )
 
-    plt.xlabel("Current [mA]")
-    plt.ylabel("Voltage [V]")
-    plt.title("PEM I V curve")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "pem_iv_curve.png", dpi=300)
-    plt.close()
+    ax.set_xlabel("Current [mA]")
+    ax.set_ylabel("Voltage [V]")
+    ax.set_title("PEM Voltage During Current Sweep")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_iv_curve.png")
 
 
 def main():
@@ -672,6 +759,7 @@ def main():
 
     plot_charge_power()
     plot_discharge_voltage(cutoff_voltage)
+    plot_charge_discharge_subplot(cutoff_voltage)
     plot_output_energy(combined_summary)
     plot_hydrogen_volume(combined_summary)
     plot_output_energy_vs_hydrogen(combined_summary)
