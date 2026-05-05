@@ -180,6 +180,16 @@ def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
         pem_params.get("pem_startup_delay_s", 2.0),
         errors="coerce",
     )
+    pem_full_hydrogen = pd.to_numeric(
+        pem_params.get(
+            "full_hydrogen_capacity_mL",
+            pd.to_numeric(pem_state["hydrogen_volume_mL"], errors="coerce").max(),
+        ),
+        errors="coerce",
+    )
+    if not pd.isna(pem_full_hydrogen):
+        pem_medium_hydrogen = max(pem_medium_hydrogen, 0.35 * float(pem_full_hydrogen))
+        pem_high_hydrogen = max(pem_high_hydrogen, 0.65 * float(pem_full_hydrogen))
 
     return EMSLimits(
         battery=BatteryLimits(
@@ -196,6 +206,8 @@ def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
             max_discharge_power_w=float(pem_params["maximum_usable_discharge_power_W"]),
             full_hydrogen_ml=float(
                 pd.to_numeric(pem_state["hydrogen_volume_mL"], errors="coerce").max()
+                if pd.isna(pem_full_hydrogen)
+                else pem_full_hydrogen
             ),
             medium_hydrogen_ml=pem_medium_hydrogen,
             high_hydrogen_ml=pem_high_hydrogen,
