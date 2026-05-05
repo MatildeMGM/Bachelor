@@ -1,0 +1,6 @@
+test,samples,max_voltage_V,current_at_max_voltage_mA,max_current_mA,voltage_at_max_current_V,max_power_mW,voltage_at_max_power_V,current_at_max_power_mA
+01 cm,151,4.591,-0.075,112.075,0.275,396.875,3.985,99.675
+05 cm,145,4.501,-0.1,111.8,0.28,360.625,4.037,89.25
+10 cm,129,4.28,-0.075,98.975,0.239,305.625,3.835,79.75
+15 cm,96,4.202,-0.075,69.925,0.172,214.375,3.584,59.725
+20 cm,77,4.14,-0.1,55.825,1.024,166.875,3.715,44.875
