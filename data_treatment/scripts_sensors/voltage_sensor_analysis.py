@@ -19,9 +19,10 @@ BACHELOR_DIR = find_bachelor_dir()
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "sensor_plots"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
-sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+sys.path.append(str(BACHELOR_DIR))
 
 from data_treatment.plots.plot_style import GREY, SENSOR_COLORS, polish_axes, save_report_figure, set_report_style
+from data_treatment.scripts_sensors.current_sensor_analysis import data as current_data
 
 
 loads = ["0", "220", "2x220", "3x220", "4x220"]
@@ -47,27 +48,41 @@ data = {
 }
 
 
-def plot_voltage_abs_error():
+def plot_combined_abs_error():
     set_report_style()
-    fig, ax = plt.subplots()
+    fig, axes = plt.subplots(2, 1, figsize=(6.8, 6.2), sharex=True)
+    current_ax, voltage_ax = axes
+
+    for sensor, values in current_data.items():
+        I_ref = values["I_ref"]
+        I_ina = values["I_ina"]
+        abs_error = I_ina - I_ref
+
+        current_ax.plot(x, abs_error, "o-", color=SENSOR_COLORS[sensor], label=sensor)
 
     for sensor, values in data.items():
         V_ref = values["V_ref"]
         V_ina = values["V_ina"]
         abs_error = V_ina - V_ref
 
-        ax.plot(x, abs_error, "o-", color=SENSOR_COLORS[sensor], label=sensor)
+        voltage_ax.plot(x, abs_error, "o-", color=SENSOR_COLORS[sensor], label=sensor)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(loads)
-    ax.set_xlabel("Load configuration")
-    ax.set_ylabel("Voltage error [V]")
-    ax.set_title("INA226 Voltage Measurement Error")
-    ax.axhline(0, linestyle="--", color="#243447", alpha=0.7, linewidth=1)
-    polish_axes(ax)
-    ax.legend(loc="center right")
+    current_ax.set_title("Current error [mA]", loc="left", fontsize=16)
+    current_ax.axhline(0, linestyle="--", color="#243447", alpha=0.7, linewidth=1)
+    polish_axes(current_ax)
 
-    save_report_figure(fig, PLOT_DIR / "Voltage_abs_error.png")
+    voltage_ax.set_xticks(x)
+    voltage_ax.set_xticklabels(loads)
+    voltage_ax.set_xlabel("Load configuration")
+    voltage_ax.set_title("Voltage error [V]", loc="left", fontsize=16)
+    voltage_ax.axhline(0, linestyle="--", color="#243447", alpha=0.7, linewidth=1)
+    polish_axes(voltage_ax)
+
+    handles, labels = current_ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 0.99))
+    fig.tight_layout(rect=(0, 0, 1, 0.89))
+    fig.savefig(PLOT_DIR / "sensor_measurement_error.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 
 def plot_voltage_correction():
@@ -115,7 +130,7 @@ def plot_voltage_correction():
 
 
 def main():
-    plot_voltage_abs_error()
+    plot_combined_abs_error()
     plot_voltage_correction()
 
     print("\nSaved sensor plots in:")

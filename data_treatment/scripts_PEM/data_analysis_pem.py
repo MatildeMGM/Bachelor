@@ -19,7 +19,7 @@ def find_bachelor_dir():
 
 
 BACHELOR_DIR = find_bachelor_dir()
-sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+sys.path.append(str(BACHELOR_DIR))
 
 from data_treatment.plots.plot_style import CURRENT_COLORS, BLUE, GREEN, PURPLE, GREY, polish_axes, save_report_figure, set_report_style
 
@@ -56,6 +56,7 @@ VOLTAGE_CORRECTION = {
 }
 
 PEM_SENSOR = 0x45
+FULL_CYCLE_FILE = CHARGE_DISCHARGE_DIR / "discharge_PEM_full.csv"
 
 def extract_test_info(file_path):
     name = file_path.stem.lower()
@@ -206,28 +207,79 @@ def trim_discharge(discharge):
     return discharge
 
 
+def split_contiguous_segments(df, mask):
+    mask = np.asarray(mask, dtype=bool)
+
+    if len(mask) == 0 or not mask.any():
+        return []
+
+    edges = np.diff(np.concatenate(([0], mask.astype(int), [0])))
+    starts = np.where(edges == 1)[0]
+    ends = np.where(edges == -1)[0]
+
+    return [df.iloc[start:end].copy() for start, end in zip(starts, ends)]
+
+
+def choose_primary_segment(segments, *, duration_s=None, discharge=False):
+    best_segment = pd.DataFrame()
+    best_score = -np.inf
+
+    for segment in segments:
+        segment = segment.copy()
+        segment["local_time_s"] = segment["time_s"] - segment["time_s"].iloc[0]
+
+        if discharge:
+            segment = trim_discharge(segment)
+            score = (
+                integrate_energy(
+                    segment["local_time_s"],
+                    abs(segment["pem_power_W"]),
+                )
+                if len(segment) > 1
+                else 0.0
+            )
+        else:
+            segment = trim_charge(segment, duration_s)
+            score = (
+                integrate_energy(
+                    segment["local_time_s"],
+                    np.maximum(segment["pem_power_W"], 0),
+                )
+                if len(segment) > 1
+                else 0.0
+            )
+
+        if score > best_score:
+            best_score = score
+            best_segment = segment
+
+    return best_segment
+
+
 def split_charge_discharge(df, duration_s=None):
     mode_text = df["mode"].astype(str) if "mode" in df.columns else pd.Series("", index=df.index)
 
-    charge = df[
+    charge_mask = (
         (df["scenario"] == 3)
         | (mode_text.str.contains("PV -> PEM", regex=False, na=False))
         | (df["pem_current_A"] > 0.01)
-    ].copy()
+    )
 
-    discharge = df[
+    discharge_mask = (
         (df["scenario"] == 6)
         | (mode_text.str.contains("PEM -> Load", regex=False, na=False))
         | (df["pem_current_A"] < -0.005)
-    ].copy()
+    )
 
-    if len(charge) > 0:
-        charge["local_time_s"] = charge["time_s"] - charge["time_s"].iloc[0]
-        charge = trim_charge(charge, duration_s)
-
-    if len(discharge) > 0:
-        discharge["local_time_s"] = discharge["time_s"] - discharge["time_s"].iloc[0]
-        discharge = trim_discharge(discharge)
+    charge = choose_primary_segment(
+        split_contiguous_segments(df, charge_mask),
+        duration_s=duration_s,
+        discharge=False,
+    )
+    discharge = choose_primary_segment(
+        split_contiguous_segments(df, discharge_mask),
+        discharge=True,
+    )
 
     return charge, discharge
 
@@ -357,6 +409,70 @@ def summarize_combined_file(file_path, volume_data, cutoff_voltage):
     }
 
 
+def find_first_sustained_time(segment, current_threshold_a, consecutive_points=3):
+    if len(segment) == 0:
+        return np.nan
+
+    current_abs = abs(segment["pem_current_A"]).to_numpy()
+    sustained = current_abs >= current_threshold_a
+
+    if len(sustained) < consecutive_points:
+        return np.nan
+
+    window = np.convolve(
+        sustained.astype(int),
+        np.ones(consecutive_points, dtype=int),
+        mode="valid",
+    )
+    indices = np.where(window == consecutive_points)[0]
+
+    if len(indices) == 0:
+        return np.nan
+
+    return float(segment["local_time_s"].iloc[indices[0]])
+
+
+def summarize_full_cycle(file_path, cutoff_voltage):
+    df = read_log(file_path)
+    charge, discharge = split_charge_discharge(df)
+
+    if len(charge) == 0 or len(discharge) == 0:
+        raise ValueError(f"Could not find both charge and discharge segments in {file_path.name}")
+
+    full_cycle = {
+        "file": file_path.name,
+        "charge_duration_s": float(charge["local_time_s"].iloc[-1]),
+        "discharge_duration_s": float(discharge["local_time_s"].iloc[-1]),
+        "startup_delay_s": find_first_sustained_time(discharge, 0.01),
+        "stable_output_delay_s": find_first_sustained_time(discharge, 0.05),
+        "charge_input_energy_J": integrate_energy(
+            charge["local_time_s"],
+            np.maximum(charge["pem_power_W"], 0),
+        ),
+        "usable_output_energy_J": integrate_energy(
+            discharge.loc[discharge["pem_voltage_V"] >= cutoff_voltage, "local_time_s"],
+            abs(discharge.loc[discharge["pem_voltage_V"] >= cutoff_voltage, "pem_power_W"]),
+        ),
+        "peak_output_power_W": float(abs(discharge["pem_power_W"]).max()),
+        "max_charge_power_W": float(np.maximum(charge["pem_power_W"], 0).max()),
+        "charge_end_voltage_V": float(charge["pem_voltage_V"].iloc[-1]),
+        "discharge_start_voltage_V": float(discharge["pem_voltage_V"].iloc[0]),
+        "discharge_min_voltage_V": float(discharge["pem_voltage_V"].min()),
+        "cutoff_voltage_V": float(cutoff_voltage),
+    }
+
+    full_cycle["usable_discharge_duration_s"] = float(
+        discharge.loc[discharge["pem_voltage_V"] >= cutoff_voltage, "local_time_s"].max()
+    )
+    full_cycle["energy_efficiency_pct"] = (
+        100.0 * full_cycle["usable_output_energy_J"] / full_cycle["charge_input_energy_J"]
+        if full_cycle["charge_input_energy_J"] > 0
+        else np.nan
+    )
+
+    return pd.DataFrame([full_cycle]), charge, discharge
+
+
 def make_state_table(summary):
     table = summary.copy()
     table = table.sort_values("output_energy_J").reset_index(drop=True)
@@ -397,7 +513,7 @@ def make_state_table(summary):
     ]
 
 
-def make_control_parameters(summary, sweep_summary, cutoff_voltage):
+def make_control_parameters(summary, sweep_summary, cutoff_voltage, full_cycle_summary):
     usable = summary[
         (summary["usable_discharge_duration_s"] > 0)
         & (summary["output_energy_J"] > 0)
@@ -415,6 +531,35 @@ def make_control_parameters(summary, sweep_summary, cutoff_voltage):
     else:
         maximum_usable_discharge_current_A = summary["max_discharge_current_A"].max()
 
+    with_hydrogen = usable.dropna(
+        subset=[
+            "hydrogen_volume_mL",
+            "hydrogen_per_input_energy_mL_per_J",
+        ]
+    ).copy()
+    output_per_hydrogen = with_hydrogen["output_energy_J"] / with_hydrogen["hydrogen_volume_mL"]
+    hydrogen_consumption = 1.0 / output_per_hydrogen.replace(0, np.nan)
+
+    hydrogen_production_rate = (
+        float(with_hydrogen["hydrogen_per_input_energy_mL_per_J"].median())
+        if len(with_hydrogen) > 0
+        else 0.08
+    )
+    hydrogen_consumption_rate = (
+        float(hydrogen_consumption.median())
+        if len(hydrogen_consumption.dropna()) > 0
+        else (6.0 / 14.0)
+    )
+
+    if len(full_cycle_summary) > 0:
+        startup_delay_s = float(full_cycle_summary.iloc[0]["startup_delay_s"])
+        stable_output_delay_s = float(full_cycle_summary.iloc[0]["stable_output_delay_s"])
+    else:
+        startup_delay_s = np.nan
+        stable_output_delay_s = np.nan
+
+    minimum_switch_time_s = startup_delay_s if not pd.isna(startup_delay_s) else 2.0
+
     return pd.DataFrame([
         {
             "minimum_hydrogen_level_for_discharge_mL": minimum_hydrogen_level_mL,
@@ -422,7 +567,11 @@ def make_control_parameters(summary, sweep_summary, cutoff_voltage):
             "maximum_usable_discharge_current_A": maximum_usable_discharge_current_A,
             "maximum_electrolysis_current_A": MAX_ELECTROLYSIS_CURRENT_A,
             "minimum_charge_time_before_useful_discharge_s": minimum_charge_time_s,
-            "minimum_time_before_switching_mode_s": minimum_charge_time_s,
+            "minimum_time_before_switching_mode_s": minimum_switch_time_s,
+            "hydrogen_production_mL_per_input_J": hydrogen_production_rate,
+            "hydrogen_consumption_mL_per_output_J": hydrogen_consumption_rate,
+            "pem_startup_delay_s": startup_delay_s,
+            "pem_stable_output_delay_s": stable_output_delay_s,
         }
     ])
 
@@ -723,6 +872,79 @@ def plot_sweep(cutoff_voltage):
     save_report_figure(fig, PLOT_DIR / "pem_iv_curve.png")
 
 
+def plot_full_cycle(charge, discharge, cutoff_voltage, full_cycle_summary):
+    set_report_style()
+    fig, axes = plt.subplots(2, 1, figsize=(8.2, 6.4), sharex=True)
+    power_ax, voltage_ax = axes
+    discharge_offset_s = float(charge["local_time_s"].iloc[-1]) + 10.0
+    discharge_time_s = discharge["local_time_s"] + discharge_offset_s
+
+    power_ax.plot(
+        charge["local_time_s"],
+        np.maximum(charge["pem_power_W"], 0) * 1000,
+        color=GREEN,
+        label="Charge input power",
+    )
+    power_ax.plot(
+        discharge_time_s,
+        abs(discharge["pem_power_W"]) * 1000,
+        color=PURPLE,
+        label="Discharge output power",
+    )
+
+    voltage_ax.plot(
+        charge["local_time_s"],
+        charge["pem_voltage_V"],
+        color=GREEN,
+        label="Charge voltage",
+    )
+    voltage_ax.plot(
+        discharge_time_s,
+        discharge["pem_voltage_V"],
+        color=PURPLE,
+        label="Discharge voltage",
+    )
+
+    summary_row = full_cycle_summary.iloc[0]
+    if not pd.isna(summary_row["startup_delay_s"]):
+        power_ax.axvline(
+            discharge_offset_s + summary_row["startup_delay_s"],
+            color=GREY,
+            linestyle=":",
+            linewidth=1.6,
+            label=f"Startup delay: {summary_row['startup_delay_s']:.1f} s",
+        )
+    if not pd.isna(summary_row["stable_output_delay_s"]):
+        power_ax.axvline(
+            discharge_offset_s + summary_row["stable_output_delay_s"],
+            color=BLUE,
+            linestyle="--",
+            linewidth=1.6,
+            label=f"Stable output: {summary_row['stable_output_delay_s']:.1f} s",
+        )
+
+    voltage_ax.axhline(
+        cutoff_voltage,
+        color=THRESHOLD_GREY,
+        linestyle="--",
+        linewidth=1.8,
+        label=f"Cutoff: {cutoff_voltage:.3f} V",
+    )
+
+    power_ax.set_ylabel("Power [mW]")
+    power_ax.set_title("PEM Full Charge and Discharge Cycle", fontsize=18)
+    power_ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    polish_axes(power_ax)
+
+    voltage_ax.set_xlabel("Cycle time [s]")
+    voltage_ax.set_ylabel("Voltage [V]")
+    voltage_ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    polish_axes(voltage_ax)
+    fig.tight_layout(rect=(0, 0, 0.8, 1))
+    fig.savefig(PLOT_DIR / "pem_full_cycle.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
 def main():
     volume_data = load_volume_data()
 
@@ -748,11 +970,21 @@ def main():
             print(f"Skipping {file_path.name}: {error}")
 
     combined_summary = pd.DataFrame(combined_rows)
+    full_cycle_summary, full_cycle_charge, full_cycle_discharge = summarize_full_cycle(
+        FULL_CYCLE_FILE,
+        cutoff_voltage,
+    )
 
     pem_state_table = make_state_table(combined_summary)
-    control_parameters = make_control_parameters(combined_summary, sweep_summary, cutoff_voltage)
+    control_parameters = make_control_parameters(
+        combined_summary,
+        sweep_summary,
+        cutoff_voltage,
+        full_cycle_summary,
+    )
 
     combined_summary.to_csv(OUTPUT_DIR / "pem_charge_discharge_summary.csv", index=False)
+    full_cycle_summary.to_csv(OUTPUT_DIR / "pem_full_cycle_summary.csv", index=False)
     pem_state_table.to_csv(OUTPUT_DIR / "pem_state_table.csv", index=False)
     sweep_summary.to_csv(OUTPUT_DIR / "current_sweep_summary.csv", index=False)
     control_parameters.to_csv(OUTPUT_DIR / "pem_control_parameters.csv", index=False)
@@ -764,6 +996,7 @@ def main():
     plot_hydrogen_volume(combined_summary)
     plot_output_energy_vs_hydrogen(combined_summary)
     plot_sweep(cutoff_voltage)
+    plot_full_cycle(full_cycle_charge, full_cycle_discharge, cutoff_voltage, full_cycle_summary)
 
     print("\nPEM state table:")
     print(pem_state_table)
@@ -773,6 +1006,9 @@ def main():
 
     print("\nCurrent sweep summary:")
     print(sweep_summary)
+
+    print("\nPEM full cycle summary:")
+    print(full_cycle_summary)
 
     print("\nEmpirical cutoff voltage:")
     print(cutoff_voltage)

@@ -54,6 +54,9 @@ class PEMLimits:
     full_hydrogen_ml: float
     medium_hydrogen_ml: float
     high_hydrogen_ml: float
+    hydrogen_production_mL_per_input_j: float
+    hydrogen_consumption_mL_per_output_j: float
+    startup_delay_s: float
 
 
 @dataclass(frozen=True)
@@ -165,6 +168,18 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
         value_column="avg_power_mW",
         default=float(pv_params["min_usable_power_for_load_mW"]),
     ) / 1000.0
+    pem_hydrogen_production = pd.to_numeric(
+        pem_params.get("hydrogen_production_mL_per_input_J", 0.08),
+        errors="coerce",
+    )
+    pem_hydrogen_consumption = pd.to_numeric(
+        pem_params.get("hydrogen_consumption_mL_per_output_J", 6.0 / 14.0),
+        errors="coerce",
+    )
+    pem_startup_delay = pd.to_numeric(
+        pem_params.get("pem_startup_delay_s", 2.0),
+        errors="coerce",
+    )
 
     return EMSLimits(
         battery=BatteryLimits(
@@ -184,6 +199,15 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
             ),
             medium_hydrogen_ml=pem_medium_hydrogen,
             high_hydrogen_ml=pem_high_hydrogen,
+            hydrogen_production_mL_per_input_j=float(
+                0.08 if pd.isna(pem_hydrogen_production) else pem_hydrogen_production
+            ),
+            hydrogen_consumption_mL_per_output_j=float(
+                (6.0 / 14.0)
+                if pd.isna(pem_hydrogen_consumption)
+                else pem_hydrogen_consumption
+            ),
+            startup_delay_s=float(2.0 if pd.isna(pem_startup_delay) else pem_startup_delay),
         ),
         pv=PVLimits(
             min_voltage_v=float(pv_params["min_pv_voltage_V"]),
@@ -258,9 +282,15 @@ def decide_current_scenario(
     )
     scenario, reason = choose_best_scenario(eligible, input_states)
 
+    required_switch_delay_s = get_required_switch_delay_s(
+        current_scenario=component_state.last_scenario,
+        next_scenario=scenario,
+        limits=limits,
+        config=config,
+    )
     if (
         scenario != component_state.last_scenario
-        and component_state.seconds_since_last_switch < config.min_switch_seconds
+        and component_state.seconds_since_last_switch < required_switch_delay_s
     ):
         scenario = 1
         reason = "minimum switching time, safe grid fallback"
@@ -539,6 +569,21 @@ def choose_best_scenario(
     return 1, "no safe local scenario, grid fallback"
 
 
+def get_required_switch_delay_s(
+    *,
+    current_scenario: int,
+    next_scenario: int,
+    limits: EMSLimits,
+    config: SchedulerConfig,
+) -> float:
+    delay_s = config.min_switch_seconds
+
+    if 6 in {current_scenario, next_scenario}:
+        delay_s = max(delay_s, limits.pem.startup_delay_s)
+
+    return float(delay_s)
+
+
 def estimate_next_pem_hydrogen(
     *,
     scenario: int,
@@ -553,13 +598,18 @@ def estimate_next_pem_hydrogen(
     next_hydrogen = pem_hydrogen_ml
 
     if scenario == 3:
-        # From the PEM tests, electrolysis gave roughly 0.08 mL hydrogen per J.
-        next_hydrogen += pv_w * config.simulated_slot_hours * 3600.0 * 0.08
+        next_hydrogen += (
+            pv_w
+            * config.simulated_slot_hours
+            * 3600.0
+            * limits.pem.hydrogen_production_mL_per_input_j
+        )
 
     if scenario == 6:
-        # Full PEM test: about 6 mL gave roughly 14 J of usable output.
         output_j = demand_w * config.simulated_slot_hours * 3600.0
-        next_hydrogen -= output_j / 14.0 * 6.0
+        next_hydrogen -= (
+            output_j * limits.pem.hydrogen_consumption_mL_per_output_j
+        )
 
     return float(np.clip(next_hydrogen, 0.0, limits.pem.full_hydrogen_ml))
 

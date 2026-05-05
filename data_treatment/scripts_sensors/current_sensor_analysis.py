@@ -19,7 +19,7 @@ BACHELOR_DIR = find_bachelor_dir()
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "sensor_plots"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
-sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+sys.path.append(str(BACHELOR_DIR))
 
 from data_treatment.plots.plot_style import GREY, SENSOR_COLORS, polish_axes, save_report_figure, set_report_style
 
@@ -111,7 +111,6 @@ def plot_current_abs_error():
 
 def main():
     plot_current_correction()
-    plot_current_abs_error()
 
     print("\nSaved current sensor plots in:")
     print(PLOT_DIR)
