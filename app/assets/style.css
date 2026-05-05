@@ -143,6 +143,30 @@ h2 {
   background: rgba(122,167,255,0.18);
 }
 
+.btn.start {
+  border-color: rgba(43,228,167,0.48);
+  background: rgba(43,228,167,0.14);
+}
+
+.btn.is-loading {
+  cursor: wait;
+  opacity: 0.82;
+}
+
+.btn.is-success {
+  border-color: rgba(43,228,167,0.58);
+  background: rgba(43,228,167,0.18);
+}
+
+.btn.is-warn {
+  border-color: rgba(255,204,102,0.55);
+  background: rgba(255,204,102,0.16);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+}
+
 .layout {
   margin-top: 14px;
   display: grid;

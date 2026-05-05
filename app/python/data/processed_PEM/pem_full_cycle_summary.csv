@@ -1,2 +1,0 @@
-file,charge_duration_s,discharge_duration_s,usable_discharge_duration_s,startup_delay_s,stable_output_delay_s,charge_input_energy_J,usable_output_energy_J,energy_efficiency_pct,peak_output_power_W,max_charge_power_W,charge_end_voltage_V,discharge_start_voltage_V,discharge_min_voltage_V,cutoff_voltage_V
-discharge_PEM_full.csv,1084.0,752.0,590.0,16.0,18.0,220.40490466496,15.236185771729998,6.912816116724216,0.19738625329499998,0.21865488425,1.4397,1.4397,-0.064,0.47333333333333333

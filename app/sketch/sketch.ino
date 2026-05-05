@@ -39,6 +39,13 @@ bool scenarioReceived = false;
 bool scenarioAccepted = true;
 String lastRejectReason = "";
 
+float PV_MIN_VOLTAGE_FOR_BATTERY_CHARGING = 0.0;
+float PV_MIN_POWER_FOR_BATTERY_CHARGING = 0.0;
+float PV_MIN_VOLTAGE_FOR_PEM_CHARGING = 0.0;
+float PV_MIN_POWER_FOR_PEM_CHARGING = 0.0;
+float PV_MIN_VOLTAGE_FOR_LOAD_SUPPLY = 0.0;
+float PV_MIN_POWER_FOR_LOAD_SUPPLY = 0.0;
+
 // Battery limits from test
 const float BATTERY_MIN_VOLTAGE = 3.0;
 const float BATTERY_MAX_VOLTAGE = 4.2;
@@ -49,12 +56,15 @@ const float BATTERY_MAX_CHARGE_CURRENT_A = 1.0;
 const float BATTERY_MAX_DISCHARGE_CURRENT_A = 0.16;
 const float BATTERY_LOW_SOC = 10.0;
 const float BATTERY_FULL_SOC = 90.0;
-const float PV_MIN_USABLE_VOLTAGE = 2.145;
-const float PV_MIN_LOAD_POWER_W = 0.050;
-const float PV_MIN_CHARGE_POWER_W = 0.023;
 const float PEM_MIN_USABLE_VOLTAGE = 0.4935;
 const float PEM_MAX_DISCHARGE_POWER_W = 0.040;
-const float SAFETY_MARGIN_W = 0.005;
+float SAFETY_MARGIN_W = 0.005;
+const float PV_VOLTAGE_CORRECTION_V = 0.180;
+const float PV_CURRENT_CORRECTION_A = 0.000138;
+const float PEM_VOLTAGE_CORRECTION_V = 0.064;
+const float PEM_CURRENT_SCALE = 0.843;
+const float PEM_CURRENT_OFFSET_A = 0.001;
+const unsigned long PV_LOADED_SETTLING_MS = 1200;
 
 // Measured values
 float nominalVoltage = 0.0;
@@ -116,8 +126,11 @@ String GetBatteryChargeState(float soc);
 bool apply_price_frame(String payload);
 bool apply_scenario_frame(String payload);
 String get_status();
+String GetCsvField(String payload, int fieldIndex);
+bool ApplyScenarioThresholds(String payload);
 bool IsScenarioSafe(int scenario, float demandW);
-String GetScenarioRejectReason(int scenario, float demandW);
+String GetScenarioPreRejectReason(int scenario, float demandW);
+String GetLoadedValidationRejectReason(int scenario, float demandW);
 void ApplyScenario(int scenario);
 
 void setup() {
@@ -217,28 +230,30 @@ bool apply_price_frame(String payload) {
 }
 
 bool apply_scenario_frame(String payload) {
-  // Expected format: SCENARIO,<slot>,<scenario>,<demand_mW>
+  // Format:
+  // SCENARIO,<slot>,<scenario>,<demand_mW>,
+  // <pv_bat_V>,<pv_bat_mW>,<pv_pem_V>,<pv_pem_mW>,<pv_load_V>,<pv_load_mW>,<safety_mW>
   if (!payload.startsWith("SCENARIO,")) {
     return false;
   }
 
-  int c1 = payload.indexOf(',');
-  int c2 = payload.indexOf(',', c1 + 1);
-  int c3 = payload.indexOf(',', c2 + 1);
-
-  if (c1 < 0 || c2 < 0 || c3 < 0) {
+  if (!ApplyScenarioThresholds(payload)) {
     return false;
   }
 
-  priceSlot = payload.substring(c1 + 1, c2).toInt();
-  requestedScenario = payload.substring(c2 + 1, c3).toInt();
-  requestedDemand_mW = payload.substring(c3 + 1).toFloat();
+  priceSlot = GetCsvField(payload, 1).toInt();
+  requestedScenario = GetCsvField(payload, 2).toInt();
+  requestedDemand_mW = GetCsvField(payload, 3).toFloat();
   scenarioReceived = true;
 
   // Use the latest measurements from loop() so the RPC handler stays responsive.
   float demandW = requestedDemand_mW / 1000.0;
 
-  lastRejectReason = GetScenarioRejectReason(requestedScenario, demandW);
+  GetVoltage();
+  GetCurrent();
+  GetPower();
+
+  lastRejectReason = GetScenarioPreRejectReason(requestedScenario, demandW);
   scenarioAccepted = lastRejectReason.length() == 0;
 
   if (!scenarioAccepted) {
@@ -250,10 +265,71 @@ bool apply_scenario_frame(String payload) {
 
   ApplyScenario(requestedScenario);
 
+  if (requestedScenario == 2 || requestedScenario == 3 || requestedScenario == 4) {
+    delay(PV_LOADED_SETTLING_MS);
+    GetVoltage();
+    GetCurrent();
+    GetPower();
+    UpdateBatterySOC();
+
+    lastRejectReason = GetLoadedValidationRejectReason(requestedScenario, demandW);
+    scenarioAccepted = lastRejectReason.length() == 0;
+
+    if (!scenarioAccepted) {
+      Scenario1();
+      Monitor.print("Requested scenario rejected after loaded validation: ");
+      Monitor.println(lastRejectReason);
+      return false;
+    }
+  }
+
   Monitor.print("Applied Python scenario: S");
   Monitor.print(requestedScenario);
   Monitor.print(" demand_mW: ");
   Monitor.println(requestedDemand_mW, 1);
+
+  return true;
+}
+
+String GetCsvField(String payload, int fieldIndex) {
+  int start = 0;
+  int end = -1;
+
+  for (int i = 0; i <= fieldIndex; i++) {
+    start = end + 1;
+    end = payload.indexOf(',', start);
+
+    if (i == fieldIndex) {
+      if (end < 0) {
+        return payload.substring(start);
+      }
+      return payload.substring(start, end);
+    }
+
+    if (end < 0) {
+      return "";
+    }
+  }
+
+  return "";
+}
+
+bool ApplyScenarioThresholds(String payload) {
+  if (GetCsvField(payload, 3).length() == 0) {
+    return false;
+  }
+
+  if (GetCsvField(payload, 10).length() == 0) {
+    return true;
+  }
+
+  PV_MIN_VOLTAGE_FOR_BATTERY_CHARGING = GetCsvField(payload, 4).toFloat();
+  PV_MIN_POWER_FOR_BATTERY_CHARGING = GetCsvField(payload, 5).toFloat() / 1000.0;
+  PV_MIN_VOLTAGE_FOR_PEM_CHARGING = GetCsvField(payload, 6).toFloat();
+  PV_MIN_POWER_FOR_PEM_CHARGING = GetCsvField(payload, 7).toFloat() / 1000.0;
+  PV_MIN_VOLTAGE_FOR_LOAD_SUPPLY = GetCsvField(payload, 8).toFloat();
+  PV_MIN_POWER_FOR_LOAD_SUPPLY = GetCsvField(payload, 9).toFloat() / 1000.0;
+  SAFETY_MARGIN_W = GetCsvField(payload, 10).toFloat() / 1000.0;
 
   return true;
 }
@@ -299,38 +375,43 @@ String get_status() {
   payload += ",scenarioAccepted=" + String(scenarioAccepted ? 1 : 0);
   payload += ",requestedScenario=" + String(requestedScenario);
   payload += ",requestedDemand_mW=" + String(requestedDemand_mW, 1);
+  payload += ",pvMinVoltageBatteryCharging=" + String(PV_MIN_VOLTAGE_FOR_BATTERY_CHARGING, 5);
+  payload += ",pvMinPowerBatteryCharging=" + String(PV_MIN_POWER_FOR_BATTERY_CHARGING, 5);
+  payload += ",pvMinVoltagePEMCharging=" + String(PV_MIN_VOLTAGE_FOR_PEM_CHARGING, 5);
+  payload += ",pvMinPowerPEMCharging=" + String(PV_MIN_POWER_FOR_PEM_CHARGING, 5);
+  payload += ",pvMinVoltageLoadSupply=" + String(PV_MIN_VOLTAGE_FOR_LOAD_SUPPLY, 5);
+  payload += ",pvMinPowerLoadSupply=" + String(PV_MIN_POWER_FOR_LOAD_SUPPLY, 5);
   payload += ",lastRejectReason=" + lastRejectReason;
 
   return payload;
 }
 
 bool IsScenarioSafe(int scenario, float demandW) {
-  return GetScenarioRejectReason(scenario, demandW).length() == 0;
+  return GetScenarioPreRejectReason(scenario, demandW).length() == 0;
 }
 
-String GetScenarioRejectReason(int scenario, float demandW) {
+String GetScenarioPreRejectReason(int scenario, float demandW) {
   if (scenario == 1) {
     return "";
   }
 
+  // Open-circuit PV voltage can be measured when PV is disconnected.
+  // Open-circuit PV power is approximately zero and cannot represent
+  // available power. PV power is only valid after PV is connected.
   if (scenario == 2) {
-    if (panelVoltage < PV_MIN_USABLE_VOLTAGE) return "PV voltage too low for battery charging";
-    if (PVpower < PV_MIN_CHARGE_POWER_W) return "PV power too low for battery charging";
+    if (panelVoltage < PV_MIN_VOLTAGE_FOR_BATTERY_CHARGING) return "PV voltage too low to try battery charging";
     if (batteryVoltage >= BATTERY_MAX_VOLTAGE) return "battery voltage already high";
     if (batterySOC >= BATTERY_FULL_SOC) return "battery SOC already full";
     return "";
   }
 
   if (scenario == 3) {
-    if (panelVoltage < PV_MIN_USABLE_VOLTAGE) return "PV voltage too low for PEM charging";
-    if (PVpower < PV_MIN_CHARGE_POWER_W) return "PV power too low for PEM charging";
+    if (panelVoltage < PV_MIN_VOLTAGE_FOR_PEM_CHARGING) return "PV voltage too low to try PEM charging";
     return "";
   }
 
   if (scenario == 4) {
-    if (panelVoltage < PV_MIN_USABLE_VOLTAGE) return "PV voltage too low for load";
-    if (PVpower < PV_MIN_LOAD_POWER_W) return "PV below minimum load power";
-    if (PVpower < demandW + SAFETY_MARGIN_W) return "PV cannot cover demand";
+    if (panelVoltage < PV_MIN_VOLTAGE_FOR_LOAD_SUPPLY) return "PV voltage too low to try load supply";
     return "";
   }
 
@@ -348,6 +429,33 @@ String GetScenarioRejectReason(int scenario, float demandW) {
   }
 
   return "unknown scenario";
+}
+
+String GetLoadedValidationRejectReason(int scenario, float demandW) {
+  // After switching S2/S3/S4, the PV is loaded by battery, PEM or load.
+  // Corrected PV current and power now represent what the panel can deliver.
+  if (scenario == 2) {
+    if (PVcurrent <= 0.0) return "PV failed loaded validation for battery charging";
+    if (PVpower < PV_MIN_POWER_FOR_BATTERY_CHARGING) return "PV failed loaded validation for battery charging";
+    if (batteryVoltage >= BATTERY_MAX_VOLTAGE) return "battery voltage already high";
+    if (batterySOC >= BATTERY_FULL_SOC) return "battery SOC already full";
+    return "";
+  }
+
+  if (scenario == 3) {
+    if (PVcurrent <= 0.0) return "PV failed loaded validation for PEM charging";
+    if (PVpower < PV_MIN_POWER_FOR_PEM_CHARGING) return "PV failed loaded validation for PEM charging";
+    return "";
+  }
+
+  if (scenario == 4) {
+    if (PVcurrent <= 0.0) return "PV failed loaded validation for load supply";
+    if (PVpower < PV_MIN_POWER_FOR_LOAD_SUPPLY) return "PV failed loaded validation for load supply";
+    if (PVpower < demandW + SAFETY_MARGIN_W) return "PV cannot cover requested demand after loaded validation";
+    return "";
+  }
+
+  return "";
 }
 
 void ApplyScenario(int scenario) {
@@ -383,12 +491,12 @@ void GetVoltage() {
 
   if (inaPVOk) {
     inaPV.readAndClearFlags();
-    panelVoltage = inaPV.getBusVoltage_V();
+    panelVoltage = inaPV.getBusVoltage_V() - PV_VOLTAGE_CORRECTION_V;
   }
 
   if (inaPEMOk) {
     inaPEM.readAndClearFlags();
-    pemrfcVoltage = inaPEM.getBusVoltage_V();
+    pemrfcVoltage = inaPEM.getBusVoltage_V() - PEM_VOLTAGE_CORRECTION_V;
   }
 }
 
@@ -405,18 +513,18 @@ void GetCurrent() {
 
   if (inaPVOk) {
     PVshuntVoltage_mV = inaPV.getShuntVoltage_mV();
-    PVcurrent = inaPV.getCurrent_mA() / 1000.0;
+    PVcurrent = (inaPV.getCurrent_mA() / 1000.0) + PV_CURRENT_CORRECTION_A;
   }
 
   if (inaPEMOk) {
     PEMshuntVoltage_mV = inaPEM.getShuntVoltage_mV();
-    PEMcurrent = inaPEM.getCurrent_mA() / 1000.0;
+    PEMcurrent = PEM_CURRENT_SCALE * (inaPEM.getCurrent_mA() / 1000.0) + PEM_CURRENT_OFFSET_A;
   }
 }
 
 void GetPower() {
   if (inaPVOk) {
-    PVpower = inaPV.getBusPower() / 1000.0;
+    PVpower = panelVoltage * PVcurrent;
   }
 
   if (inaLoadOk) {
@@ -424,7 +532,7 @@ void GetPower() {
   }
 
   if (inaPEMOk) {
-    PEMpower = inaPEM.getBusPower() / 1000.0;
+    PEMpower = pemrfcVoltage * PEMcurrent;
   }
 
   if (inaBatOk) {

@@ -6,6 +6,7 @@ Extracts operating thresholds and creates PV state characterization
 
 from pathlib import Path
 import sys
+import re
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -26,7 +27,7 @@ def find_bachelor_dir():
 BACHELOR_DIR = find_bachelor_dir()
 sys.path.append(str(BACHELOR_DIR))
 
-from data_treatment.plots.plot_style import DISTANCE_COLORS, GREEN, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
+from data_treatment.plots.plot_style import DISTANCE_COLORS, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "PV_test" / "New_test"
 OUTPUT_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_PV"
@@ -52,28 +53,38 @@ CURRENT_CORRECTION = {
     0x45: lambda i: 0.843 * i + 0.001,  # PEM (ina4)
 }
 
+# Manually inspected windows from the full corrected time-series plot.
+# These remove only the clearly delayed stopped-log tails after the sweep has
+# collapsed, while keeping the open-circuit/startup and short-circuit behavior.
+PV_TEST_WINDOWS_S = {
+    1: (0, 141),
+    5: (0, 120),
+    10: (0, 115),
+    15: (0, 98),
+    20: (0, 69),
+}
+
+OBSOLETE_OUTPUTS = [
+    OUTPUT_DIR / "pv_test_summary.csv",
+    OUTPUT_DIR / "pv_state_table.csv",
+    PLOT_DIR / "pv_analysis_summary.png",
+    PLOT_DIR / "pv_full_corrected_series.png",
+    PLOT_DIR / "pv_operating_states.png",
+    PLOT_DIR / "pv_voltage_vs_distance.png",
+]
+
 
 def extract_distance_from_filename(file_path):
-    """Extract distance in cm from filename (e.g., 'PV_01cm_ramp.csv' -> 1)"""
-    name = file_path.stem.lower()
-    if "01cm" in name:
-        return 1
-    elif "05cm" in name:
-        return 5
-    elif "10cm" in name:
-        return 10
-    elif "15cm" in name:
-        return 15
-    elif "20cm" in name:
-        return 20
-    return None
+    """Extract distance in cm from filenames like PV_01cm_ramp.csv or PV_1cm_ramp.csv."""
+    match = re.search(r"pv_0?(\d+)cm", file_path.stem.lower())
+    return int(match.group(1)) if match else None
 
 
 def read_pv_log(file_path):
     """
     Read PV test log file and extract relevant sensor data.
     ina3 is the PV panel in the EMS logger.
-    Uses raw data without calibration to match the PV ramp notebook analysis.
+    Applies the INA226 calibration corrections before calculating PV power.
     """
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
@@ -82,68 +93,60 @@ def read_pv_log(file_path):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["time_s"] = (df["timestamp"] - df["timestamp"].iloc[0]).dt.total_seconds()
     
-    # Extract PV sensor data (ina3 / 0x44).
-    df["pv_voltage_V"] = pd.to_numeric(df["ina3_bus_V"], errors="coerce")
-    df["pv_current_A"] = pd.to_numeric(df["ina3_current_mA"], errors="coerce") / 1000
+    # Extract and correct PV sensor data (ina3 / 0x44).
+    raw_voltage_V = pd.to_numeric(df["ina3_bus_V"], errors="coerce")
+    raw_current_A = pd.to_numeric(df["ina3_current_mA"], errors="coerce") / 1000
+
+    df["pv_voltage_V"] = VOLTAGE_CORRECTION[PV_SENSOR](raw_voltage_V)
+    df["pv_current_A"] = CURRENT_CORRECTION[PV_SENSOR](raw_current_A)
     
-    # Calculate power (positive = sourcing from PV)
+    # Calculate corrected power (positive = sourcing from PV)
     df["pv_power_mW"] = df["pv_voltage_V"] * df["pv_current_A"] * 1000
     
-    # Clean data - remove non-physical values
+    # Clean data - remove only missing values. Keep the corrected measurement
+    # behavior, including low voltage and reverse-current regions.
     df = df.dropna(subset=["time_s", "pv_voltage_V", "pv_current_A", "pv_power_mW"])
-    df = df[df["pv_voltage_V"] > 2.0]  # Filter out noise at low voltages
-    df = df[df["pv_current_A"] > -0.1]  # Filter out large negative currents
     
     return df[["timestamp", "time_s", "pv_voltage_V", "pv_current_A", "pv_power_mW"]].copy()
 
 
-def identify_ramp_start(df, threshold_A=0.05):
-    """
-    Identify where the current ramp actually starts (above noise).
-    Useful for handling startup transients.
-    """
-    current = df["pv_current_A"].to_numpy()
-    candidates = np.where(current > threshold_A)[0]
-    
-    if len(candidates) > 0:
-        return candidates[0]
-    return 0
+def apply_inspected_test_window(df, distance_cm):
+    """Trim only visually inspected stopped-log tails from the corrected data."""
+    if distance_cm not in PV_TEST_WINDOWS_S:
+        return df.copy()
+
+    start_s, end_s = PV_TEST_WINDOWS_S[distance_cm]
+    return df[(df["time_s"] >= start_s) & (df["time_s"] <= end_s)].copy()
 
 
-def extract_steady_state_metrics(df, start_idx=0):
-    """
-    Extract representative metrics from the PV load ramp.
-    The ramp sweeps through load points, so the maximum power point is more
-    meaningful than averaging the final part of the ramp.
-    """
-    if start_idx > 0 and start_idx < len(df):
-        df = df.iloc[start_idx:].copy()
-    
+def voltage_at_power_threshold(df, threshold_mW):
+    """Return the lowest voltage where corrected PV power reaches a threshold."""
+    candidates = df[df["pv_power_mW"] >= threshold_mW]
+    if candidates.empty:
+        return np.nan
+    return candidates["pv_voltage_V"].min()
+
+
+def extract_threshold_metrics(df):
+    """Extract only the corrected PV values needed for EMS threshold selection."""
     if len(df) < 2:
         return None
-    
-    metrics = {
-        "ramp_duration_s": df["time_s"].iloc[-1] - df["time_s"].iloc[0],
-        "min_voltage_V": df["pv_voltage_V"].min(),
-        "max_voltage_V": df["pv_voltage_V"].max(),
-        "avg_voltage_V": df["pv_voltage_V"].mean(),
-        "min_current_A": df["pv_current_A"].min(),
-        "max_current_A": df["pv_current_A"].max(),
-        "avg_current_A": df["pv_current_A"].mean(),
-        "min_power_mW": df["pv_power_mW"].min(),
-        "max_power_mW": df["pv_power_mW"].max(),
-        "avg_power_mW": df["pv_power_mW"].mean(),
-    }
 
+    # MPP values characterize PV capability at each lamp distance.
     mpp_idx = df["pv_power_mW"].idxmax()
     mpp_row = df.loc[mpp_idx]
-    metrics.update({
+
+    # Voltage at fixed power thresholds is used for EMS control design.
+    return {
         "mpp_voltage_V": mpp_row["pv_voltage_V"],
         "mpp_current_A": mpp_row["pv_current_A"],
         "mpp_power_mW": mpp_row["pv_power_mW"],
-    })
-    
-    return metrics
+        "min_voltage_for_20mW": voltage_at_power_threshold(df, 20),
+        "min_voltage_for_50mW": voltage_at_power_threshold(df, 50),
+        "max_voltage_V": df["pv_voltage_V"].max(),
+        "max_current_A": df["pv_current_A"].max(),
+        "max_power_mW": df["pv_power_mW"].max(),
+    }
 
 
 def analyze_all_tests():
@@ -158,9 +161,8 @@ def analyze_all_tests():
         print(f"Processing {file_path.name} (distance: {distance_cm} cm)...")
         
         try:
-            df = read_pv_log(file_path)
-            start_idx = identify_ramp_start(df)
-            metrics = extract_steady_state_metrics(df, start_idx)
+            df = apply_inspected_test_window(read_pv_log(file_path), distance_cm)
+            metrics = extract_threshold_metrics(df)
             
             if metrics:
                 metrics["distance_cm"] = distance_cm
@@ -173,85 +175,39 @@ def analyze_all_tests():
         except Exception as e:
             print(f"  ERROR: {e}")
     
-    return pd.DataFrame(results)
-
-
-def create_pv_state_table(summary_df):
-    """
-    Create three EMS PV states from the controlled lamp distance tests.
-
-    The distance ranges are only used to define the laboratory states. During
-    operation, the EMS still classifies PV from the live voltage/current/power.
-    """
-    summary_df = summary_df.sort_values("distance_cm").copy()
-
-    state_ranges = [
-        ("HIGH", 0.0, 5.0),
-        ("MEDIUM", 5.0, 12.5),
-        ("LOW", 12.5, 20.0),
+    columns = [
+        "distance_cm",
+        "file",
+        "mpp_voltage_V",
+        "mpp_current_A",
+        "mpp_power_mW",
+        "min_voltage_for_20mW",
+        "min_voltage_for_50mW",
+        "max_voltage_V",
+        "max_current_A",
+        "max_power_mW",
     ]
-
-    states = []
-    for state_name, min_distance, max_distance in state_ranges:
-        if state_name == "HIGH":
-            mask = (
-                (summary_df["distance_cm"] >= min_distance)
-                & (summary_df["distance_cm"] <= max_distance)
-            )
-        else:
-            mask = (
-                (summary_df["distance_cm"] > min_distance)
-                & (summary_df["distance_cm"] <= max_distance)
-            )
-
-        group = summary_df[mask]
-        if group.empty:
-            continue
-
-        states.append({
-            "light_state": state_name,
-            "ems_state": state_name,
-            "min_distance_cm": min_distance,
-            "max_distance_cm": max_distance,
-            "test_distances_cm": ", ".join(str(int(value)) for value in group["distance_cm"]),
-            "avg_voltage_V": group["mpp_voltage_V"].mean(),
-            "min_power_mW": group["mpp_power_mW"].min(),
-            "avg_power_mW": group["mpp_power_mW"].mean(),
-            "max_power_mW": group["mpp_power_mW"].max(),
-            "max_current_A": group["mpp_current_A"].max(),
-        })
-
-    return pd.DataFrame(states)
+    return pd.DataFrame(results).reindex(columns=columns)
 
 
-def create_operating_thresholds(summary_df, state_table):
+def create_operating_thresholds(summary_df):
     """
-    Create a control parameters table with key thresholds for algorithm.
+    Create final EMS control parameters from corrected, windowed PV data.
     """
-    # Find minimum usable voltage (lowest voltage with meaningful power)
-    min_voltage = summary_df["mpp_voltage_V"].min()
-    max_voltage = summary_df["mpp_voltage_V"].max()
-    
-    # Find maximum available current
-    max_current = summary_df["mpp_current_A"].max()
-    
-    # Find power levels for decision thresholds
-    max_power = summary_df["mpp_power_mW"].max()
-    min_usable_power = summary_df["mpp_power_mW"].min() * 0.5  # Conservative estimate
-    
     thresholds = {
-        "min_pv_voltage_V": [max(min_voltage - 0.1, 2.0)],  # Minimum voltage to expect PV
-        "max_pv_voltage_V": [max_voltage + 0.2],
-        "max_available_current_A": [max_current],
-        "max_available_power_mW": [max_power],
-        "min_usable_power_for_charging_mW": [max(min_usable_power, 20)],  # Threshold to start charging
-        "min_usable_power_for_load_mW": [max(min_usable_power, 50)],  # Threshold for direct load supply
+        "min_pv_voltage_for_charging_V": [summary_df["min_voltage_for_20mW"].min()],
+        "min_pv_voltage_for_load_V": [summary_df["min_voltage_for_50mW"].min()],
+        "max_pv_voltage_V": [summary_df["max_voltage_V"].max()],
+        "max_available_current_A": [summary_df["max_current_A"].max()],
+        "max_available_power_mW": [summary_df["max_power_mW"].max()],
+        "min_usable_power_for_charging_mW": [20],
+        "min_usable_power_for_load_mW": [50],
     }
     
     return pd.DataFrame(thresholds)
 
 
-def generate_plots(summary_df, state_table):
+def generate_mpp_plots(summary_df):
     """Generate report-ready PV characterization plots."""
     set_report_style()
     summary_df = summary_df.sort_values("distance_cm")
@@ -275,22 +231,6 @@ def generate_plots(summary_df, state_table):
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
     ax.plot(
         summary_df["distance_cm"],
-        summary_df["mpp_voltage_V"],
-        marker="o",
-        color=GREEN,
-        label="Voltage at MPP",
-    )
-    ax.invert_xaxis()
-    ax.set_xlabel("Lamp distance [cm]")
-    ax.set_ylabel("PV voltage [V]")
-    ax.set_title("PV Voltage at Maximum Power")
-    ax.legend(loc="best")
-    polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pv_voltage_vs_distance.png")
-    
-    fig, ax = plt.subplots(figsize=(8.0, 4.8))
-    ax.plot(
-        summary_df["distance_cm"],
         summary_df["mpp_current_A"] * 1000,
         marker="o",
         color=PURPLE,
@@ -303,47 +243,60 @@ def generate_plots(summary_df, state_table):
     ax.legend(loc="best")
     polish_axes(ax)
     save_report_figure(fig, PLOT_DIR / "pv_current_vs_distance.png")
-    
-    fig, ax = plt.subplots(figsize=(8.0, 4.8))
-    state_colors = {
-        "LOW": BLUE,
-        "MEDIUM": GREEN,
-        "HIGH": PURPLE,
-    }
-    state_order = ["LOW", "MEDIUM", "HIGH"]
-    state_table = state_table.set_index("ems_state").loc[state_order].reset_index()
-    x = np.arange(len(state_table))
 
-    for index, row in state_table.iterrows():
-        state = row["ems_state"]
-        color = state_colors.get(state, BLUE)
-        ax.errorbar(
-            index,
-            row["avg_power_mW"],
-            yerr=[
-                [row["avg_power_mW"] - row["min_power_mW"]],
-                [row["max_power_mW"] - row["avg_power_mW"]],
-            ],
-            fmt="o",
-            markersize=9,
-            capsize=7,
-            color=color,
-            label=f"{state}: {row['min_distance_cm']:.1f}-{row['max_distance_cm']:.1f} cm",
-        )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(state_order)
-    ax.set_xlabel("EMS PV state")
-    ax.set_ylabel("PV power [mW]")
-    ax.set_title("PV Operating States Used by the EMS")
-    ax.legend(loc="best")
-    polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pv_operating_states.png")
+def generate_corrected_series_plot(windowed, filename, title):
+    """
+    Plot corrected PV voltage, current and power versus time.
+
+    Before-window plots show sensor-corrected raw behavior. After-window plots
+    show the manually inspected data used for EMS threshold calculations.
+    """
+    set_report_style()
+    distance_files = sorted(DATA_DIR.glob("PV_*cm_ramp.csv"))
+
+    fig, axes = plt.subplots(3, 1, figsize=(10.0, 10.0), sharex=True)
+    voltage_ax, current_ax, power_ax = axes
+
+    for file_path in distance_files:
+        distance_cm = extract_distance_from_filename(file_path)
+        df = read_pv_log(file_path)
+        if windowed:
+            df = apply_inspected_test_window(df, distance_cm)
+
+        color = DISTANCE_COLORS.get(distance_cm, BLUE)
+        label = f"{distance_cm} cm"
+
+        voltage_ax.plot(df["time_s"], df["pv_voltage_V"], color=color, label=label)
+        current_ax.plot(df["time_s"], df["pv_current_A"] * 1000, color=color, label=label)
+        power_ax.plot(df["time_s"], df["pv_power_mW"], color=color, label=label)
+
+    voltage_ax.set_ylabel("PV voltage [V]")
+    current_ax.set_ylabel("PV current [mA]")
+    power_ax.set_ylabel("PV power [mW]")
+    power_ax.set_xlabel("Time [s]")
+
+    voltage_ax.set_title(title)
+    voltage_ax.legend(loc="best")
+
+    for ax in axes:
+        polish_axes(ax)
+
+    save_report_figure(fig, PLOT_DIR / filename)
+
+
+def remove_obsolete_outputs():
+    """Remove old broad-summary outputs that are no longer part of PV treatment."""
+    for path in OBSOLETE_OUTPUTS:
+        if path.exists():
+            path.unlink()
 
 
 def main():
     """Main execution"""
     print("=" * 60)
+
+    remove_obsolete_outputs()
     print("PV Panel Analysis")
     print("=" * 60)
     
@@ -356,33 +309,35 @@ def main():
     
     print(f"\nProcessed {len(summary_df)} test files")
     
-    # Create state table
-    state_table = create_pv_state_table(summary_df)
-    print(f"\nCreated PV state table with {len(state_table)} states")
-    
     # Create operating thresholds
-    thresholds = create_operating_thresholds(summary_df, state_table)
+    thresholds = create_operating_thresholds(summary_df)
     print("Created operating thresholds")
     
     # Save outputs
-    summary_df.to_csv(OUTPUT_DIR / "pv_test_summary.csv", index=False)
-    state_table.to_csv(OUTPUT_DIR / "pv_state_table.csv", index=False)
+    summary_df.to_csv(OUTPUT_DIR / "pv_threshold_summary.csv", index=False)
     thresholds.to_csv(OUTPUT_DIR / "pv_control_parameters.csv", index=False)
     
     print(f"\nOutputs saved to {OUTPUT_DIR}")
     
     # Generate plots
-    generate_plots(summary_df, state_table)
+    generate_corrected_series_plot(
+        windowed=False,
+        filename="pv_corrected_series_before_windowing.png",
+        title="Corrected PV Test Series Before Windowing",
+    )
+    generate_corrected_series_plot(
+        windowed=True,
+        filename="pv_corrected_series_after_windowing.png",
+        title="Corrected PV Test Series After Windowing",
+    )
+    generate_mpp_plots(summary_df)
     
     # Print summary
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print("\nPV Test Summary:")
+    print("\nPV Threshold Summary:")
     print(summary_df.to_string())
-    
-    print("\n\nPV State Table:")
-    print(state_table.to_string())
     
     print("\n\nOperating Thresholds:")
     print(thresholds.to_string())

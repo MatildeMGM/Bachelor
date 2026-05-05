@@ -37,11 +37,14 @@ class EMSState:
 
         # Accelerated demo timing
         self.demo_enabled = True
-        self.demo_running = True
+        self.demo_running = False
+        self.demo_armed = False
         self.demo_cycle = 0
         self.demo_slot_seconds = 7.5
         self.demo_elapsed_seconds = 0.0
         self.demo_started_at = 0.0
+        self.demo_start_epoch_ms = 0
+        self.demo_start_label = ""
 
         # Demand lookahead
         self.demand_profile = []
@@ -93,8 +96,68 @@ class EMSState:
         self.battery_charge_state = ""
 
         # PEM state is not directly measured as hydrogen volume, so this remains
-        # an EMS estimate updated by the scheduler/control layer.
+        # an EMS estimate updated from logged charge input.
         self.pem_hydrogen_ml = 0.0
+        self.pem_charge_c = 0.0
+        self.pem_discharge_c = 0.0
+        self.pem_hydrogen_coulomb_efficiency = 0.0
+        self.pem_theoretical_hydrogen_production_ml_per_c = 0.0
+        self.pem_hydrogen_capacity_ml = 0.0
+        self.last_hydrogen_update_monotonic = None
+
+    def configure_hydrogen_estimator(self, limits):
+        self.pem_hydrogen_coulomb_efficiency = limits.pem.hydrogen_coulomb_efficiency
+        self.pem_theoretical_hydrogen_production_ml_per_c = (
+            limits.pem.theoretical_hydrogen_production_mL_per_C
+        )
+        self.pem_hydrogen_capacity_ml = limits.pem.full_hydrogen_ml
+        self.pem_hydrogen_ml = min(
+            max(self.pem_hydrogen_ml, 0.0),
+            self.pem_hydrogen_capacity_ml,
+        )
+
+    def reset_hydrogen_estimator(self, initial_hydrogen_ml=0.0):
+        self.pem_charge_c = 0.0
+        self.pem_discharge_c = 0.0
+        self.pem_hydrogen_ml = min(
+            max(_as_float(initial_hydrogen_ml), 0.0),
+            self.pem_hydrogen_capacity_ml,
+        )
+        self.last_hydrogen_update_monotonic = time.monotonic()
+
+    def update_estimated_hydrogen(self):
+        now = time.monotonic()
+        if self.last_hydrogen_update_monotonic is None:
+            self.last_hydrogen_update_monotonic = now
+            return
+
+        dt_s = now - self.last_hydrogen_update_monotonic
+        self.last_hydrogen_update_monotonic = now
+        if dt_s <= 0.0 or dt_s > 10.0:
+            return
+
+        ml_per_c = (
+            self.pem_hydrogen_coulomb_efficiency
+            * self.pem_theoretical_hydrogen_production_ml_per_c
+        )
+        if ml_per_c <= 0.0 or self.pem_hydrogen_capacity_ml <= 0.0:
+            return
+
+        # Hydrogen is estimated from Faraday's law using corrected PEM current.
+        # Positive current is electrolysis; negative current is fuel-cell use.
+        if self.scenario == 3 and self.pem_current > 0.0:
+            delta_q_c = self.pem_current * dt_s
+            self.pem_charge_c += delta_q_c
+            self.pem_hydrogen_ml += ml_per_c * delta_q_c
+        elif self.scenario == 6 and self.pem_current < 0.0:
+            delta_q_c = abs(self.pem_current) * dt_s
+            self.pem_discharge_c += delta_q_c
+            self.pem_hydrogen_ml -= ml_per_c * delta_q_c
+
+        self.pem_hydrogen_ml = min(
+            max(self.pem_hydrogen_ml, 0.0),
+            self.pem_hydrogen_capacity_ml,
+        )
 
     def apply_arduino_status(self, status):
         self.arduino_status = status or {}
@@ -123,9 +186,12 @@ class EMSState:
         self.mode = str(self.arduino_status.get("mode", ""))
         scenario = _scenario_from_mode(self.mode)
         if scenario and scenario != self.scenario:
+            self.update_estimated_hydrogen()
             self.last_scenario = self.scenario
             self.scenario = scenario
             self.last_scenario_change_monotonic = time.monotonic()
+        else:
+            self.update_estimated_hydrogen()
 
     def update_current_demand(self):
         if self.demand_profile and len(self.demand_profile) > self.current_slot:
@@ -160,9 +226,12 @@ class EMSState:
         )
 
         if "pem_hydrogen_est_ml" in self.current_decision:
-            self.pem_hydrogen_ml = _as_float(
-                self.current_decision.get("pem_hydrogen_est_ml"),
-                self.pem_hydrogen_ml,
+            self.pem_hydrogen_ml = min(
+                max(_as_float(
+                    self.current_decision.get("pem_hydrogen_est_ml"),
+                    self.pem_hydrogen_ml,
+                ), 0.0),
+                self.pem_hydrogen_capacity_ml,
             )
 
 

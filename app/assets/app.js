@@ -1,5 +1,6 @@
 let socket;
 let latest = null;
+let refreshStateTimer = null;
 const plotState = {
   cycle: null,
   pointsBySlot: new Map()
@@ -32,6 +33,14 @@ function setBadge(id, text, kind) {
   el.textContent = text;
   el.classList.remove("ok", "warn", "bad");
   if (kind) el.classList.add(kind);
+}
+
+function setButtonState(button, text, state, disabled = false) {
+  if (!button) return;
+  button.textContent = text;
+  button.disabled = disabled;
+  button.classList.remove("is-loading", "is-success", "is-warn");
+  if (state) button.classList.add(state);
 }
 
 function getPriceScheme(price) {
@@ -319,7 +328,10 @@ function renderAll(data) {
   setText("clientsText", rt.clients ?? "-");
   setText("sourceText", rt.price_source ?? "-");
   setText("sketchSlotText", s.slot ?? "-");
+  setText("demoStateText", demo.armed ? "Armed" : (demo.running ? "Running" : "Ready"));
   setText("demoCycleText", demo.cycle ?? "-");
+  setText("demoStartText", demo.start_label || "-");
+  setText("loadSyncText", demo.sync_endpoint || "/api/demo-sync");
   setText("targetScenarioText", scheduler.target_scenario ? `S${scheduler.target_scenario}` : "-");
   setText(
     "scenarioAcceptedText",
@@ -376,6 +388,17 @@ function renderAll(data) {
   if (zoneSelect && rt.price_zone) {
     zoneSelect.value = rt.price_zone;
   }
+
+  const startDemoBtn = document.getElementById("startDemoBtn");
+  if (startDemoBtn) {
+    if (demo.armed) {
+      setButtonState(startDemoBtn, "Starting...", "is-loading", true);
+    } else if (demo.running) {
+      setButtonState(startDemoBtn, "Restart demo", "is-warn", false);
+    } else {
+      setButtonState(startDemoBtn, "Start demo", "", false);
+    }
+  }
 }
 
 function sendControl(action, extra = {}) {
@@ -397,20 +420,35 @@ document.addEventListener("DOMContentLoaded", () => {
 
   socket.on("telemetry", (data) => {
     renderAll(data);
+
+    const refreshBtn = document.getElementById("refreshBtn");
+    if (refreshBtn?.classList.contains("is-loading")) {
+      setButtonState(refreshBtn, "Updated", "is-success", true);
+      window.clearTimeout(refreshStateTimer);
+      refreshStateTimer = window.setTimeout(() => {
+        setButtonState(refreshBtn, "Refresh now", "", false);
+      }, 1200);
+    }
   });
 
   const refreshBtn = document.getElementById("refreshBtn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
+      setButtonState(refreshBtn, "Refreshing...", "is-loading", true);
+      window.clearTimeout(refreshStateTimer);
       sendControl("refresh");
+      refreshStateTimer = window.setTimeout(() => {
+        setButtonState(refreshBtn, "Refresh now", "", false);
+      }, 8000);
     });
   }
 
-  const restartDemoBtn = document.getElementById("restartDemoBtn");
-  if (restartDemoBtn) {
-    restartDemoBtn.addEventListener("click", () => {
+  const startDemoBtn = document.getElementById("startDemoBtn");
+  if (startDemoBtn) {
+    startDemoBtn.addEventListener("click", () => {
       plotState.pointsBySlot.clear();
-      sendControl("restart_demo");
+      setButtonState(startDemoBtn, "Arming...", "is-loading", true);
+      sendControl(latest?.demo?.running ? "restart_demo" : "start_demo");
     });
   }
 

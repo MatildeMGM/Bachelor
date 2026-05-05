@@ -29,7 +29,9 @@ from scheduler import (
 
 ui = WebUI()
 limits = load_limits()
+state.configure_hydrogen_estimator(limits)
 scheduler_config = SchedulerConfig()
+DEMO_START_DELAY_SECONDS = 5.0
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_FIELDS = [
     "real_time",
@@ -54,11 +56,14 @@ LOG_FIELDS = [
     "battery_soc_percent",
     "battery_energy_wh",
     "pem_hydrogen_est_ml",
+    "pem_charge_c",
+    "pem_discharge_c",
     "battery_voltage_v",
     "pem_voltage_v",
     "command",
 ]
 logged_slots = set()
+sent_scenario_slots = set()
 
 
 def get_now():
@@ -85,8 +90,28 @@ def slot_to_interval_label(slot):
 
 
 def update_demo_time():
-    if state.demo_started_at == 0.0:
-        state.demo_started_at = time.monotonic()
+    if state.demo_armed:
+        seconds_until_start = state.demo_started_at - time.monotonic()
+        if seconds_until_start > 0:
+            state.demo_elapsed_seconds = 0.0
+            state.current_slot = 0
+            state.current_hour = 0
+            state.current_minute = 0
+            state.current_time_label = slot_to_time_label(0)
+            state.current_interval_label = slot_to_interval_label(0)
+            return
+
+        state.demo_armed = False
+        state.demo_running = True
+
+    if not state.demo_running:
+        state.demo_elapsed_seconds = 0.0
+        state.current_slot = 0
+        state.current_hour = 0
+        state.current_minute = 0
+        state.current_time_label = slot_to_time_label(0)
+        state.current_interval_label = slot_to_interval_label(0)
+        return
 
     elapsed = time.monotonic() - state.demo_started_at
     absolute_slot = int(elapsed // state.demo_slot_seconds)
@@ -125,9 +150,13 @@ def build_payload():
         "demo": {
             "enabled": state.demo_enabled,
             "running": state.demo_running,
+            "armed": state.demo_armed,
             "cycle": state.demo_cycle,
             "slot_seconds": state.demo_slot_seconds,
             "elapsed_seconds": state.demo_elapsed_seconds,
+            "start_epoch_ms": state.demo_start_epoch_ms,
+            "start_label": state.demo_start_label,
+            "sync_endpoint": "/api/demo-sync",
         },
         "prices": state.prices,
         "demand_profile": state.demand_profile,
@@ -147,6 +176,12 @@ def build_payload():
             "last_log_update": state.last_log_update,
         },
         "arduino_status": state.arduino_status,
+        "ems_estimates": {
+            "estimated_hydrogen_mL": state.pem_hydrogen_ml,
+            "pem_charge_C": state.pem_charge_c,
+            "pem_discharge_C": state.pem_discharge_c,
+            "measured_full_hydrogen_capacity_mL": state.pem_hydrogen_capacity_ml,
+        },
     }
 
 
@@ -193,6 +228,25 @@ def refresh_inputs():
     refresh_demand_profile()
 
 
+def arm_demo_start(delay_seconds=DEMO_START_DELAY_SECONDS):
+    start_monotonic = time.monotonic() + delay_seconds
+    start_epoch_ms = int((time.time() + delay_seconds) * 1000)
+
+    state.demo_running = False
+    state.demo_armed = True
+    state.demo_cycle = 0
+    state.demo_elapsed_seconds = 0.0
+    state.demo_started_at = start_monotonic
+    state.demo_start_epoch_ms = start_epoch_ms
+    state.demo_start_label = datetime.fromtimestamp(
+        start_epoch_ms / 1000,
+        tz=DK_TZ,
+    ).isoformat(timespec="milliseconds")
+    state.reset_hydrogen_estimator()
+    update_current_inputs()
+    start_demo_log()
+
+
 def run_scheduler_decision():
     if not state.prices or not state.demand_profile:
         return
@@ -230,6 +284,7 @@ def start_demo_log():
     state.log_file = str(path)
     state.last_log_update = ""
     logged_slots.clear()
+    sent_scenario_slots.clear()
 
 
 def log_current_slot():
@@ -266,6 +321,8 @@ def log_current_slot():
         "battery_soc_percent": status.get("batterySOC", ""),
         "battery_energy_wh": status.get("batteryEnergyWh", ""),
         "pem_hydrogen_est_ml": state.pem_hydrogen_ml,
+        "pem_charge_c": state.pem_charge_c,
+        "pem_discharge_c": state.pem_discharge_c,
         "battery_voltage_v": status.get("batteryVoltage", ""),
         "pem_voltage_v": status.get("pemrfcVoltage", ""),
         "command": state.current_command,
@@ -283,19 +340,26 @@ def publish_state(push_bridge=True):
     with state_lock:
         update_current_inputs()
 
-        if push_bridge:
-            try:
-                state.apply_arduino_status(fetch_arduino_status())
-                run_scheduler_decision()
+        try:
+            state.apply_arduino_status(fetch_arduino_status())
+            run_scheduler_decision()
+
+            if push_bridge:
                 push_price_to_mcu()
-                push_scenario_to_mcu(state.current_command)
+
+                scenario_key = (state.demo_cycle, state.current_slot)
+                if state.current_command and scenario_key not in sent_scenario_slots:
+                    push_scenario_to_mcu(state.current_command)
+                    sent_scenario_slots.add(scenario_key)
+
                 state.apply_arduino_status(fetch_arduino_status())
                 log_current_slot()
-                state.bridge_ok = True
-                state.last_error = ""
-            except Exception as e:
-                state.bridge_ok = False
-                state.last_error = f"Bridge error: {e}"
+
+            state.bridge_ok = True
+            state.last_error = ""
+        except Exception as e:
+            state.bridge_ok = False
+            state.last_error = f"Bridge error: {e}"
 
         payload = build_payload()
 
@@ -304,9 +368,10 @@ def publish_state(push_bridge=True):
 
 def ems_loop():
     state.demo_enabled = DEMO_ENABLED
-    state.demo_running = True
+    state.demo_running = False
+    state.demo_armed = False
     state.demo_slot_seconds = DEMO_SLOT_SECONDS
-    state.demo_started_at = time.monotonic()
+    state.demo_started_at = 0.0
 
     refresh_inputs()
     start_demo_log()
@@ -319,8 +384,11 @@ def ems_loop():
                 update_current_inputs()
                 current_slot = state.current_slot
 
-            # The EMS decision is updated once per simulated 15 minute slot.
-            if current_slot != last_slot:
+            # Only push the slot command when the demo is running and enters a new slot.
+            if not state.demo_running:
+                last_slot = None
+
+            if state.demo_running and current_slot != last_slot:
                 publish_state(push_bridge=True)
                 last_slot = current_slot
             else:
@@ -350,25 +418,22 @@ def on_price_control(client_id, data):
 
     if action == "refresh":
         refresh_inputs()
-        publish_state(push_bridge=True)
+        publish_state(push_bridge=state.demo_running)
 
     elif action == "set_zone":
         zone = (data or {}).get("zone", DEFAULT_PRICE_ZONE)
         if zone in VALID_PRICE_ZONES:
             state.price_zone = zone
             refresh_prices()
-            publish_state(push_bridge=True)
+            publish_state(push_bridge=state.demo_running)
         else:
             state.last_error = "Invalid price zone"
             send_telemetry()
 
-    elif action == "restart_demo":
+    elif action in ["start_demo", "restart_demo"]:
         with state_lock:
-            state.demo_started_at = time.monotonic()
-            state.demo_cycle = 0
-            update_current_inputs()
-            start_demo_log()
-        publish_state(push_bridge=True)
+            arm_demo_start()
+        publish_state(push_bridge=False)
 
     else:
         send_telemetry()
@@ -379,7 +444,23 @@ def api_status():
         return build_payload()
 
 
+def api_demo_sync():
+    with state_lock:
+        update_current_inputs()
+        return {
+            "armed": state.demo_armed,
+            "running": state.demo_running,
+            "start_epoch_ms": state.demo_start_epoch_ms,
+            "start_label": state.demo_start_label,
+            "slot_seconds": state.demo_slot_seconds,
+            "elapsed_seconds": state.demo_elapsed_seconds,
+            "current_slot": state.current_slot,
+            "demo_cycle": state.demo_cycle,
+        }
+
+
 def setup_ui():
     ui.expose_api("GET", "/api/status", api_status)
+    ui.expose_api("GET", "/api/demo-sync", api_demo_sync)
     ui.on_message("state_request", on_state_request)
     ui.on_message("price_control", on_price_control)
