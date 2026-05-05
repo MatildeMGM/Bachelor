@@ -1,0 +1,2 @@
+min_pv_voltage_V,max_pv_voltage_V,max_available_current_A,max_available_power_mW,min_usable_power_for_charging_mW,min_usable_power_for_load_mW
+2.145,3.614966666666667,0.10471363636363637,305.6649831818182,23.255780833333336,50
