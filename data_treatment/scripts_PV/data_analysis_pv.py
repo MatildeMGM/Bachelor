@@ -29,7 +29,7 @@ sys.path.append(str(BACHELOR_DIR))
 from data_treatment.plots.plot_style import DISTANCE_COLORS, GREEN, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "PV_test" / "New_test"
-OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_PV"
+OUTPUT_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_PV"
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "pv_plots"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

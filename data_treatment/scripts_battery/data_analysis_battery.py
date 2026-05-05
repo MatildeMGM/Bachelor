@@ -1,21 +1,23 @@
 from pathlib import Path
 import sys
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 BACHELOR_DIR = SCRIPT_DIR.parents[1]
-sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+sys.path.append(str(BACHELOR_DIR))
 
 from data_treatment.plots.plot_style import BLUE, GREEN, PURPLE, polish_axes, save_report_figure, set_report_style
 
 DATA_DIR = BACHELOR_DIR / "data" / "Battery_test"
 
-OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_Battery"
+OUTPUT_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_Battery"
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "battery_plots"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,14 +43,14 @@ def integrate_energy(time_s, power_w):
     if len(time_s) < 2:
         return 0.0
 
-    return np.trapz(power_w, time_s)
+    return np.trapezoid(power_w, time_s)
 
 
 def integrate_charge(time_s, current_a):
     if len(time_s) < 2:
         return 0.0
 
-    charge_as = np.trapz(current_a, time_s)
+    charge_as = np.trapezoid(current_a, time_s)
     charge_ah = charge_as / 3600
 
     return charge_ah

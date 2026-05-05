@@ -40,7 +40,7 @@ CHARGE_DISCHARGE_DIR = DATA_DIR / "charge_discharge"
 SWEEP_DIR = DATA_DIR / "current_sweep"
 VOLUME_FILE = DATA_DIR / "volume_readings" / "readings.csv"
 
-OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_PEM"
+OUTPUT_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_PEM"
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "pem_plots"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,10 +49,13 @@ PEM_PREFIX = "ina4"
 PEM_SENSOR = 0x45
 FULL_CYCLE_FILE = CHARGE_DISCHARGE_DIR / "discharge_PEM_full.csv"
 PREFERRED_SWEEP_FILE = "sweep_increasing_load_10s.csv"
+POLARIZATION_FILE = SWEEP_DIR / "PEM_polarization_characteristics.csv"
 
 INITIAL_CUTOFF_VOLTAGE = 0.50
 MAX_ELECTROLYSIS_CURRENT_A = 0.40
 SWEEP_MEASURED_HYDROGEN_ML = 12.0
+POLARIZATION_STEP_DURATION_S = 30.0
+POLARIZATION_AVERAGE_WINDOW_S = 10.0
 
 FARADAY_CONSTANT_C_PER_MOL = 96485.33212
 HYDROGEN_ELECTRONS_PER_MOL = 2
@@ -600,6 +603,105 @@ def plot_output_energy_vs_hydrogen(summary):
     save_report_figure(fig, PLOT_DIR / "pem_output_energy_vs_hydrogen_volume.png")
 
 
+def summarize_polarization_curve(cutoff_voltage):
+    if not POLARIZATION_FILE.exists():
+        return pd.DataFrame()
+
+    df = read_log(POLARIZATION_FILE)
+    _, discharge = split_charge_discharge(df)
+
+    if len(discharge) < 2:
+        return pd.DataFrame()
+
+    discharge = discharge.copy()
+    start_time_s = discharge["time_s"].iloc[0]
+    discharge["step_index"] = np.floor(
+        (discharge["time_s"] - start_time_s) / POLARIZATION_STEP_DURATION_S
+    ).astype(int)
+    discharge["step_time_s"] = (
+        discharge["time_s"] - start_time_s
+    ) - discharge["step_index"] * POLARIZATION_STEP_DURATION_S
+
+    stable = discharge[
+        discharge["step_time_s"]
+        >= POLARIZATION_STEP_DURATION_S - POLARIZATION_AVERAGE_WINDOW_S
+    ].copy()
+
+    rows = []
+    previous_current_a = -np.inf
+
+    for step_index, step in stable.groupby("step_index"):
+        if len(step) < 2:
+            continue
+
+        current_a = float(abs(step["pem_current_A"]).mean())
+        voltage_v = float(step["pem_voltage_V"].mean())
+        power_w = current_a * voltage_v
+
+        rows.append({
+            "step_index": int(step_index),
+            "current_A": current_a,
+            "current_mA": current_a * 1000,
+            "voltage_V": voltage_v,
+            "power_W": power_w,
+            "power_mW": power_w * 1000,
+            "is_above_cutoff": voltage_v >= cutoff_voltage,
+            "is_increasing_current": current_a >= previous_current_a,
+        })
+
+        previous_current_a = current_a
+
+    return pd.DataFrame(rows)
+
+
+def plot_polarization_curve(cutoff_voltage):
+    polarization = summarize_polarization_curve(cutoff_voltage)
+    if len(polarization) == 0:
+        return polarization
+
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+
+    increasing = polarization[polarization["is_increasing_current"]].copy()
+    collapsed = polarization[~polarization["is_increasing_current"]].copy()
+
+    ax.plot(
+        increasing["current_A"],
+        increasing["voltage_V"],
+        marker="o",
+        color=BLUE,
+        linewidth=1.8,
+        label="Averaged load steps",
+    )
+
+    if len(collapsed) > 0:
+        ax.scatter(
+            collapsed["current_A"],
+            collapsed["voltage_V"],
+            s=45,
+            color=GREY,
+            alpha=0.75,
+            label="After collapse",
+        )
+
+    ax.axhline(
+        cutoff_voltage,
+        color="#4A4A4A",
+        linestyle="--",
+        linewidth=1.6,
+        label=f"Cutoff: {cutoff_voltage:.3f} V",
+    )
+
+    ax.set_xlabel("Current [A]")
+    ax.set_ylabel("Voltage [V]")
+    ax.set_title("PEM Fuel Cell Polarization Curve")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_polarization_curve.png")
+
+    return polarization
+
+
 def plot_full_cycle(charge, discharge, cutoff_voltage, full_cycle_summary):
     set_report_style()
     fig, axes = plt.subplots(2, 1, figsize=(8.2, 6.4), sharex=True)
@@ -636,12 +738,22 @@ def plot_full_cycle(charge, discharge, cutoff_voltage, full_cycle_summary):
     plt.close(fig)
 
 
-def save_outputs(sweep_summary, charge_summary, full_cycle_summary, state_table, control_parameters):
+def save_outputs(
+    sweep_summary,
+    charge_summary,
+    full_cycle_summary,
+    state_table,
+    control_parameters,
+    polarization_summary,
+):
     sweep_summary.to_csv(OUTPUT_DIR / "current_sweep_summary.csv", index=False)
     charge_summary.to_csv(OUTPUT_DIR / "pem_charge_discharge_summary.csv", index=False)
     full_cycle_summary.to_csv(OUTPUT_DIR / "pem_full_cycle_summary.csv", index=False)
     state_table.to_csv(OUTPUT_DIR / "pem_state_table.csv", index=False)
     control_parameters.to_csv(OUTPUT_DIR / "pem_control_parameters.csv", index=False)
+
+    if len(polarization_summary) > 0:
+        polarization_summary.to_csv(OUTPUT_DIR / "pem_polarization_summary.csv", index=False)
 
 
 def make_plots(charge_summary, cutoff_voltage, full_cycle_charge, full_cycle_discharge, full_cycle_summary):
@@ -663,7 +775,10 @@ def make_plots(charge_summary, cutoff_voltage, full_cycle_charge, full_cycle_dis
         "pem_hydrogen_volume_vs_charge_time.png",
     )
     plot_output_energy_vs_hydrogen(charge_summary)
+    polarization_summary = plot_polarization_curve(cutoff_voltage)
     plot_full_cycle(full_cycle_charge, full_cycle_discharge, cutoff_voltage, full_cycle_summary)
+
+    return polarization_summary
 
 
 def main():
@@ -675,8 +790,16 @@ def main():
     full_cycle_summary, full_cycle_charge, full_cycle_discharge = summarize_full_cycle(cutoff_voltage)
     state_table = make_state_table(charge_summary)
     control_parameters = make_control_parameters(charge_summary, sweep_summary, cutoff_voltage, full_cycle_summary)
+    polarization_summary = summarize_polarization_curve(cutoff_voltage)
 
-    save_outputs(sweep_summary, charge_summary, full_cycle_summary, state_table, control_parameters)
+    save_outputs(
+        sweep_summary,
+        charge_summary,
+        full_cycle_summary,
+        state_table,
+        control_parameters,
+        polarization_summary,
+    )
     make_plots(charge_summary, cutoff_voltage, full_cycle_charge, full_cycle_discharge, full_cycle_summary)
 
     print("\nPEM state table:")
@@ -687,6 +810,8 @@ def main():
     print(sweep_summary)
     print("\nPEM full cycle summary:")
     print(full_cycle_summary)
+    print("\nPEM polarization summary:")
+    print(polarization_summary)
     print("\nSaved output files in:")
     print(OUTPUT_DIR)
     print("\nSaved plots in:")

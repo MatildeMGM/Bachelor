@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_TREATMENT_DIR = PROJECT_ROOT / "data_treatment"
+APP_PYTHON_DIR = Path(__file__).resolve().parent
+APP_DATA_DIR = APP_PYTHON_DIR / "data"
 DEMAND_PROFILE_PATH = (
     Path(__file__).resolve().parent
     / "data"
@@ -109,10 +109,10 @@ class SchedulerConfig:
     min_switch_seconds: float = 2.0
 
 
-def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimits:
+def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
     """Load the operating limits found during data processing."""
 
-    base = Path(data_treatment_dir)
+    base = Path(data_dir)
 
     battery_state = pd.read_csv(base / "processed_Battery" / "battery_state_table.csv")
     battery_discharge = pd.read_csv(
@@ -193,7 +193,7 @@ def load_limits(data_treatment_dir: Path | str = DATA_TREATMENT_DIR) -> EMSLimit
         pem=PEMLimits(
             min_voltage_v=float(pem_params["minimum_usable_fuel_cell_voltage_V"]),
             min_hydrogen_ml=float(pem_params["minimum_hydrogen_level_for_discharge_mL"]),
-            max_discharge_power_w=float(pem_sweep["max_power_W"]),
+            max_discharge_power_w=float(pem_params["maximum_usable_discharge_power_W"]),
             full_hydrogen_ml=float(
                 pd.to_numeric(pem_state["hydrogen_volume_mL"], errors="coerce").max()
             ),
