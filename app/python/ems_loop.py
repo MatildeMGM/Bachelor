@@ -5,21 +5,21 @@ from pathlib import Path
 
 from arduino.app_bricks.web_ui import WebUI
 
-from app.python.bridge import (
+from bridge import (
     fetch_arduino_status,
     push_price_to_mcu,
     push_scenario_to_mcu,
 )
-from app.python.config import (
+from config import (
     DEFAULT_PRICE_ZONE,
     DEMO_ENABLED,
     DEMO_SLOT_SECONDS,
     DK_TZ,
     VALID_PRICE_ZONES,
 )
-from app.python.data.prices import fetch_prices_for_today
-from app.python.ems_state import known_clients, state, state_lock
-from app.python.scheduler import (
+from data.prices import fetch_prices_for_today
+from ems_state import known_clients, state, state_lock
+from scheduler import (
     SchedulerConfig,
     decide_current_scenario,
     load_limits,

@@ -4,7 +4,7 @@ import threading
 
 from arduino.app_utils import App
 
-from app.python.ems_loop import ems_loop, setup_ui
+from ems_loop import ems_loop, setup_ui
 
 setup_ui()
 

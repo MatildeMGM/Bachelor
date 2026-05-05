@@ -3,7 +3,7 @@
 import threading
 import time
 
-from app.python.config import DEFAULT_PRICE_ZONE, PRICE_SOURCE
+from config import DEFAULT_PRICE_ZONE, PRICE_SOURCE
 
 
 def _as_float(value, default=0.0):
@@ -137,7 +137,7 @@ class EMSState:
         return max(0.0, time.monotonic() - self.last_scenario_change_monotonic)
 
     def to_component_state(self):
-        from app.python.scheduler import ComponentState
+        from scheduler import ComponentState
 
         return ComponentState(
             battery_soc_percent=self.battery_soc,

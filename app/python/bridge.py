@@ -4,8 +4,8 @@ from datetime import datetime
 
 from arduino.app_utils import Bridge
 
-from app.python.config import BRIDGE_TIMEOUT, DK_TZ
-from app.python.ems_state import state
+from config import BRIDGE_TIMEOUT, DK_TZ
+from ems_state import state
 
 
 def get_now():
