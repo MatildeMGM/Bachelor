@@ -1,2 +1,2 @@
-file,charge_duration_s,discharge_duration_s,startup_delay_s,stable_output_delay_s,charge_input_energy_J,usable_output_energy_J,peak_output_power_W,max_charge_power_W,charge_end_voltage_V,discharge_start_voltage_V,discharge_min_voltage_V,cutoff_voltage_V,usable_discharge_duration_s,energy_efficiency_pct
-discharge_PEM_full.csv,1084.0,752.0,16.0,18.0,220.40490466496,14.35410325764625,0.19738625329499998,0.21865488425,1.4397,1.4397,-0.064,0.4935,551.0,6.512606096250937
+file,charge_duration_s,discharge_duration_s,usable_discharge_duration_s,startup_delay_s,stable_output_delay_s,charge_input_energy_J,usable_output_energy_J,energy_efficiency_pct,peak_output_power_W,max_charge_power_W,charge_end_voltage_V,discharge_start_voltage_V,discharge_min_voltage_V,cutoff_voltage_V
+discharge_PEM_full.csv,1084.0,752.0,541.0,16.0,18.0,220.40490466496,14.121609614771248,6.407121309862713,0.19738625329499998,0.21865488425,1.4397,1.4397,-0.064,0.49720000000000003

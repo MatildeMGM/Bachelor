@@ -2,10 +2,13 @@ from pathlib import Path
 import re
 import sys
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 def find_bachelor_dir():
@@ -21,25 +24,39 @@ def find_bachelor_dir():
 BACHELOR_DIR = find_bachelor_dir()
 sys.path.append(str(BACHELOR_DIR))
 
-from data_treatment.plots.plot_style import CURRENT_COLORS, BLUE, GREEN, PURPLE, GREY, polish_axes, save_report_figure, set_report_style
+from data_treatment.plots.plot_style import (  # noqa: E402
+    BLUE,
+    CURRENT_COLORS,
+    GREEN,
+    GREY,
+    PURPLE,
+    polish_axes,
+    save_report_figure,
+    set_report_style,
+)
 
 DATA_DIR = BACHELOR_DIR / "data" / "PEM_test"
 CHARGE_DISCHARGE_DIR = DATA_DIR / "charge_discharge"
 SWEEP_DIR = DATA_DIR / "current_sweep"
-
 VOLUME_FILE = DATA_DIR / "volume_readings" / "readings.csv"
 
 OUTPUT_DIR = BACHELOR_DIR / "data_treatment" / "processed_PEM"
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "pem_plots"
-
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 PEM_PREFIX = "ina4"
-INITIAL_CUTOFF_ESTIMATE = 0.50
-MAX_ELECTROLYSIS_CURRENT_A = 0.40
+PEM_SENSOR = 0x45
+FULL_CYCLE_FILE = CHARGE_DISCHARGE_DIR / "discharge_PEM_full.csv"
+PREFERRED_SWEEP_FILE = "sweep_increasing_load_10s.csv"
 
-# --- SENSOR CALIBRATION CONSTANTS ---
+INITIAL_CUTOFF_VOLTAGE = 0.50
+MAX_ELECTROLYSIS_CURRENT_A = 0.40
+SWEEP_MEASURED_HYDROGEN_ML = 12.0
+
+FARADAY_CONSTANT_C_PER_MOL = 96485.33212
+HYDROGEN_ELECTRONS_PER_MOL = 2
+MOLAR_VOLUME_ML_PER_MOL_25C = 24465.0
 
 CURRENT_CORRECTION = {
     0x40: lambda i: i + 0.000563,
@@ -55,41 +72,41 @@ VOLTAGE_CORRECTION = {
     0x45: lambda v: v - 0.064,
 }
 
-PEM_SENSOR = 0x45
-FULL_CYCLE_FILE = CHARGE_DISCHARGE_DIR / "discharge_PEM_full.csv"
+
+def integrate(x, y):
+    if len(x) < 2:
+        return 0.0
+
+    return float(np.trapezoid(y, x))
+
+
+def h2_from_charge_mL(charge_c):
+    hydrogen_mol = charge_c / (HYDROGEN_ELECTRONS_PER_MOL * FARADAY_CONSTANT_C_PER_MOL)
+    return hydrogen_mol * MOLAR_VOLUME_ML_PER_MOL_25C
+
 
 def extract_test_info(file_path):
     name = file_path.stem.lower()
-
-    # Match patterns like "020a" or "030a" for current
     current_match = re.search(r"(\d{3})a", name)
     duration_match = re.search(r"(\d+)s", name)
     repeat_match = re.search(r"_r(\d+)", name)
 
-    current_a = int(current_match.group(1)) / 100 if current_match else None
-    duration_s = int(duration_match.group(1)) if duration_match else None
-    repeat = int(repeat_match.group(1)) if repeat_match else None
+    current_a = int(current_match.group(1)) / 100 if current_match else np.nan
+    duration_s = int(duration_match.group(1)) if duration_match else np.nan
+    repeat = int(repeat_match.group(1)) if repeat_match else np.nan
 
     return current_a, duration_s, repeat
 
 
 def load_volume_data():
     volume = pd.read_csv(VOLUME_FILE)
+    for column in ["current_A", "time_s", "volume_mL"]:
+        volume[column] = pd.to_numeric(volume[column], errors="coerce")
 
-    volume["current_A"] = pd.to_numeric(volume["current_A"], errors="coerce")
-    volume["time_s"] = pd.to_numeric(volume["time_s"], errors="coerce")
-    volume["volume_mL"] = pd.to_numeric(volume["volume_mL"], errors="coerce")
-
-    volume = volume.dropna(subset=["current_A", "time_s", "volume_mL"])
-    volume["volume_rate_mL_per_s"] = volume["volume_mL"] / volume["time_s"]
-
-    return volume
+    return volume.dropna(subset=["current_A", "time_s", "volume_mL"])
 
 
-def estimate_hydrogen_volume(volume_data, current_a, duration_s):
-    if current_a is None or duration_s is None:
-        return np.nan
-
+def measured_hydrogen(volume_data, current_a, duration_s):
     match = volume_data[
         np.isclose(volume_data["current_A"], current_a)
         & np.isclose(volume_data["time_s"], duration_s)
@@ -98,118 +115,37 @@ def estimate_hydrogen_volume(volume_data, current_a, duration_s):
     if len(match) == 0:
         return np.nan
 
-    return match["volume_mL"].iloc[0]
+    return float(match["volume_mL"].iloc[0])
 
 
 def read_log(file_path):
-    if file_path.stat().st_size == 0:
-        raise ValueError(f"Empty file: {file_path.name}")
-
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
-
-    if len(df) == 0:
-        raise ValueError(f"No rows in file: {file_path.name}")
 
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["time_s"] = (df["timestamp"] - df["timestamp"].iloc[0]).dt.total_seconds()
         df["scenario"] = pd.to_numeric(df["scenario"], errors="coerce")
-
         raw_voltage = pd.to_numeric(df[f"{PEM_PREFIX}_bus_V"], errors="coerce")
         raw_current = pd.to_numeric(df[f"{PEM_PREFIX}_current_mA"], errors="coerce") / 1000
-
     elif "elapsed_s" in df.columns:
         df["time_s"] = pd.to_numeric(df["elapsed_s"], errors="coerce")
         df["scenario"] = np.nan
         df["mode"] = "old_sweep"
-
         raw_voltage = pd.to_numeric(df["bus_V"], errors="coerce")
         raw_current = pd.to_numeric(df["current_mA"], errors="coerce") / 1000
-
     else:
         raise ValueError(f"Unknown log format: {file_path.name}")
 
     df["pem_voltage_V"] = VOLTAGE_CORRECTION[PEM_SENSOR](raw_voltage)
     df["pem_current_A"] = CURRENT_CORRECTION[PEM_SENSOR](raw_current)
-
     df["pem_power_W"] = df["pem_voltage_V"] * df["pem_current_A"]
 
-    df = df.dropna(subset=["time_s", "pem_voltage_V", "pem_current_A", "pem_power_W"])
-
-    return df
+    return df.dropna(subset=["time_s", "pem_voltage_V", "pem_current_A", "pem_power_W"])
 
 
-def trim_charge(charge, duration_s):
-    if len(charge) < 2:
-        return charge
-
-    charge = charge.copy()
-    current = charge["pem_current_A"].to_numpy()
-
-    start_candidates = np.where(current > 0.05)[0]
-
-    if len(start_candidates) > 0:
-        start_idx = start_candidates[0]
-        charge = charge.iloc[start_idx:].copy()
-        charge["local_time_s"] = charge["time_s"] - charge["time_s"].iloc[0]
-
-    if duration_s is not None:
-        charge = charge[charge["local_time_s"] <= duration_s].copy()
-
-    if len(charge) < 2:
-        return charge
-
-    current = charge["pem_current_A"].to_numpy()
-    search_start = max(int(len(current) * 0.5), 5)
-
-    stop_candidates = np.where(current[search_start:] < 0.05)[0]
-
-    if len(stop_candidates) > 0:
-        stop_idx = search_start + stop_candidates[0]
-        charge = charge.iloc[:stop_idx].copy()
-
-    if len(charge) > 0:
-        charge["local_time_s"] = charge["time_s"] - charge["time_s"].iloc[0]
-
-    return charge
-
-
-def trim_discharge(discharge):
-    if len(discharge) < 2:
-        return discharge
-
-    discharge = discharge.copy()
-    abs_current = np.abs(discharge["pem_current_A"].to_numpy())
-
-    zero_threshold = 0.005
-    start_search = max(int(len(abs_current) * 0.2), 30)
-
-    if start_search >= len(abs_current):
-        discharge["local_time_s"] = discharge["time_s"] - discharge["time_s"].iloc[0]
-        return discharge
-
-    near_zero_mask = abs_current[start_search:] < zero_threshold
-    zero_runs = np.diff(np.concatenate(([0], near_zero_mask.astype(int), [0])))
-
-    zero_starts = np.where(zero_runs == 1)[0]
-    zero_ends = np.where(zero_runs == -1)[0]
-
-    for start, end in zip(zero_starts, zero_ends):
-        if end - start >= 3:
-            cut_idx = start_search + start
-            discharge = discharge.iloc[:cut_idx].copy()
-            break
-
-    if len(discharge) > 0:
-        discharge["local_time_s"] = discharge["time_s"] - discharge["time_s"].iloc[0]
-
-    return discharge
-
-
-def split_contiguous_segments(df, mask):
+def contiguous_segments(df, mask):
     mask = np.asarray(mask, dtype=bool)
-
     if len(mask) == 0 or not mask.any():
         return []
 
@@ -220,211 +156,226 @@ def split_contiguous_segments(df, mask):
     return [df.iloc[start:end].copy() for start, end in zip(starts, ends)]
 
 
-def choose_primary_segment(segments, *, duration_s=None, discharge=False):
-    best_segment = pd.DataFrame()
+def trim_charge(segment, duration_s=None):
+    if len(segment) < 2:
+        return segment
+
+    segment = segment.copy()
+    start_candidates = np.where(segment["pem_current_A"].to_numpy() > 0.05)[0]
+    if len(start_candidates) > 0:
+        segment = segment.iloc[start_candidates[0]:].copy()
+
+    segment["local_time_s"] = segment["time_s"] - segment["time_s"].iloc[0]
+
+    if not pd.isna(duration_s):
+        segment = segment[segment["local_time_s"] <= duration_s].copy()
+
+    return segment
+
+
+def trim_discharge(segment):
+    if len(segment) < 2:
+        return segment
+
+    segment = segment.copy()
+    segment["local_time_s"] = segment["time_s"] - segment["time_s"].iloc[0]
+
+    abs_current = abs(segment["pem_current_A"]).to_numpy()
+    search_start = max(int(len(abs_current) * 0.2), 30)
+    if search_start >= len(abs_current):
+        return segment
+
+    near_zero = abs_current[search_start:] < 0.005
+    zero_edges = np.diff(np.concatenate(([0], near_zero.astype(int), [0])))
+    zero_starts = np.where(zero_edges == 1)[0]
+    zero_ends = np.where(zero_edges == -1)[0]
+
+    for start, end in zip(zero_starts, zero_ends):
+        if end - start >= 3:
+            segment = segment.iloc[:search_start + start].copy()
+            segment["local_time_s"] = segment["time_s"] - segment["time_s"].iloc[0]
+            break
+
+    return segment
+
+
+def segment_energy_score(segment, discharge=False):
+    if len(segment) < 2:
+        return 0.0
+
+    power = abs(segment["pem_power_W"]) if discharge else np.maximum(segment["pem_power_W"], 0)
+    return integrate(segment["local_time_s"], power)
+
+
+def best_segment(segments, *, duration_s=None, discharge=False):
+    best = pd.DataFrame()
     best_score = -np.inf
 
     for segment in segments:
-        segment = segment.copy()
-        segment["local_time_s"] = segment["time_s"] - segment["time_s"].iloc[0]
-
-        if discharge:
-            segment = trim_discharge(segment)
-            score = (
-                integrate_energy(
-                    segment["local_time_s"],
-                    abs(segment["pem_power_W"]),
-                )
-                if len(segment) > 1
-                else 0.0
-            )
-        else:
-            segment = trim_charge(segment, duration_s)
-            score = (
-                integrate_energy(
-                    segment["local_time_s"],
-                    np.maximum(segment["pem_power_W"], 0),
-                )
-                if len(segment) > 1
-                else 0.0
-            )
-
+        segment = trim_discharge(segment) if discharge else trim_charge(segment, duration_s)
+        score = segment_energy_score(segment, discharge=discharge)
         if score > best_score:
+            best = segment
             best_score = score
-            best_segment = segment
 
-    return best_segment
+    return best
 
 
 def split_charge_discharge(df, duration_s=None):
-    mode_text = df["mode"].astype(str) if "mode" in df.columns else pd.Series("", index=df.index)
+    mode_text = df.get("mode", pd.Series("", index=df.index)).astype(str)
 
     charge_mask = (
         (df["scenario"] == 3)
-        | (mode_text.str.contains("PV -> PEM", regex=False, na=False))
+        | mode_text.str.contains("PV -> PEM", regex=False, na=False)
         | (df["pem_current_A"] > 0.01)
     )
-
     discharge_mask = (
         (df["scenario"] == 6)
-        | (mode_text.str.contains("PEM -> Load", regex=False, na=False))
+        | mode_text.str.contains("PEM -> Load", regex=False, na=False)
         | (df["pem_current_A"] < -0.005)
     )
 
-    charge = choose_primary_segment(
-        split_contiguous_segments(df, charge_mask),
-        duration_s=duration_s,
-        discharge=False,
-    )
-    discharge = choose_primary_segment(
-        split_contiguous_segments(df, discharge_mask),
-        discharge=True,
-    )
+    charge = best_segment(contiguous_segments(df, charge_mask), duration_s=duration_s)
+    discharge = best_segment(contiguous_segments(df, discharge_mask), discharge=True)
 
     return charge, discharge
 
 
-def integrate_energy(time_s, power_w):
-    if len(time_s) < 2:
-        return 0.0
+def get_sweep_file():
+    preferred = SWEEP_DIR / PREFERRED_SWEEP_FILE
+    if preferred.exists():
+        return preferred
 
-    return np.trapezoid(power_w, time_s)
+    sweep_files = sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv"))
+    if not sweep_files:
+        raise FileNotFoundError("No PEM current sweep file found")
+
+    return sweep_files[0]
 
 
-def summarize_sweep(file_path):
+def summarize_sweep():
+    file_path = get_sweep_file()
     df = read_log(file_path)
+    charge, discharge = split_charge_discharge(df)
+    sweep = discharge if len(discharge) > 1 else df
 
-    collapse_points = df[df["pem_voltage_V"] < INITIAL_CUTOFF_ESTIMATE]
+    usable = sweep[sweep["pem_voltage_V"] >= INITIAL_CUTOFF_VOLTAGE]
+    collapse = sweep[sweep["pem_voltage_V"] < INITIAL_CUTOFF_VOLTAGE]
 
-    if len(collapse_points) > 0:
-        collapse_index = collapse_points.index[0]
-        location = df.index.get_loc(collapse_index)
-        previous_index = df.index[location - 1] if location > 0 else collapse_index
-
-        max_sustainable_current_a = abs(df.loc[previous_index, "pem_current_A"])
-        collapse_voltage_v = df.loc[collapse_index, "pem_voltage_V"]
+    if len(usable) > 0:
+        max_current_a = float(abs(usable["pem_current_A"]).max())
+        max_power_w = float(abs(usable["pem_power_W"]).max())
     else:
-        max_sustainable_current_a = abs(df["pem_current_A"]).max()
-        collapse_voltage_v = df["pem_voltage_V"].min()
+        max_current_a = 0.0
+        max_power_w = 0.0
 
-    return {
-        "file": file_path.name,
-        "max_sustainable_current_A": max_sustainable_current_a,
-        "collapse_voltage_V": collapse_voltage_v,
-        "max_power_W": abs(df["pem_power_W"]).max(),
-        "min_voltage_V": df["pem_voltage_V"].min(),
-    }
-
-
-def get_empirical_cutoff_voltage(sweep_summary):
-    if len(sweep_summary) == 0:
-        return INITIAL_CUTOFF_ESTIMATE
-
-    cutoff = sweep_summary["collapse_voltage_V"].dropna()
-
-    if len(cutoff) == 0:
-        return INITIAL_CUTOFF_ESTIMATE
-
-    return float(cutoff.iloc[0])
-
-
-def summarize_combined_file(file_path, volume_data, cutoff_voltage):
-    current_a, duration_s, repeat = extract_test_info(file_path)
-
-    df = read_log(file_path)
-    charge, discharge = split_charge_discharge(df, duration_s)
-
-    hydrogen_volume_mL = estimate_hydrogen_volume(volume_data, current_a, duration_s)
+    collapse_voltage_v = (
+        float(collapse["pem_voltage_V"].iloc[0])
+        if len(collapse) > 0
+        else float(sweep["pem_voltage_V"].min())
+    )
 
     if len(charge) > 1:
-        charge_power = np.maximum(charge["pem_power_W"], 0)
-        input_energy_j = integrate_energy(charge["local_time_s"], charge_power)
-
-        measured_charge_duration_s = charge["local_time_s"].iloc[-1]
-        avg_charge_voltage_v = charge["pem_voltage_V"].mean()
-        avg_charge_current_a = charge["pem_current_A"].mean()
-        avg_charge_power_w = charge_power.mean()
+        input_charge_c = integrate(charge["local_time_s"], np.maximum(charge["pem_current_A"], 0))
+        coulomb_h2_mL = h2_from_charge_mL(input_charge_c)
+        measured_h2_mL = SWEEP_MEASURED_HYDROGEN_ML if file_path.name == PREFERRED_SWEEP_FILE else np.nan
+        h2_error_mL = coulomb_h2_mL - measured_h2_mL if not pd.isna(measured_h2_mL) else np.nan
+        h2_error_pct = 100.0 * h2_error_mL / measured_h2_mL if measured_h2_mL > 0 else np.nan
+        faradaic_efficiency_pct = 100.0 * measured_h2_mL / coulomb_h2_mL if coulomb_h2_mL > 0 else np.nan
+        charge_duration_s = float(charge["local_time_s"].iloc[-1])
+        avg_charge_current_a = float(np.maximum(charge["pem_current_A"], 0).mean())
+        input_energy_j = integrate(charge["local_time_s"], np.maximum(charge["pem_power_W"], 0))
     else:
-        input_energy_j = 0.0
-        measured_charge_duration_s = 0.0
-        avg_charge_voltage_v = 0.0
+        input_charge_c = 0.0
+        coulomb_h2_mL = np.nan
+        measured_h2_mL = np.nan
+        h2_error_mL = np.nan
+        h2_error_pct = np.nan
+        faradaic_efficiency_pct = np.nan
+        charge_duration_s = 0.0
         avg_charge_current_a = 0.0
-        avg_charge_power_w = 0.0
+        input_energy_j = 0.0
 
+    return pd.DataFrame([
+        {
+            "file": file_path.name,
+            "max_sustainable_current_A": max_current_a,
+            "max_sustainable_power_W": max_power_w,
+            "collapse_voltage_V": collapse_voltage_v,
+            "min_voltage_V": float(sweep["pem_voltage_V"].min()),
+            "charge_duration_s": charge_duration_s,
+            "avg_charge_current_A": avg_charge_current_a,
+            "input_charge_C": input_charge_c,
+            "input_energy_J": input_energy_j,
+            "coulomb_counted_hydrogen_mL": coulomb_h2_mL,
+            "measured_hydrogen_mL": measured_h2_mL,
+            "hydrogen_error_mL": h2_error_mL,
+            "hydrogen_error_pct": h2_error_pct,
+            "faradaic_efficiency_pct": faradaic_efficiency_pct,
+        }
+    ])
+
+
+def summarize_charge_discharge_file(file_path, volume_data, cutoff_voltage):
+    current_a, duration_s, repeat = extract_test_info(file_path)
+    df = read_log(file_path)
+    charge, discharge = split_charge_discharge(df, duration_s)
     usable = discharge[discharge["pem_voltage_V"] >= cutoff_voltage].copy()
 
-    if len(discharge) > 0:
-        measured_discharge_duration_s = discharge["local_time_s"].iloc[-1]
-        min_discharge_voltage_v = discharge["pem_voltage_V"].min()
-        max_discharge_voltage_v = discharge["pem_voltage_V"].max()
-        max_discharge_current_a = abs(discharge["pem_current_A"]).max()
-    else:
-        measured_discharge_duration_s = 0.0
-        min_discharge_voltage_v = 0.0
-        max_discharge_voltage_v = 0.0
-        max_discharge_current_a = 0.0
+    h2_mL = measured_hydrogen(volume_data, current_a, duration_s)
+    charge_power = np.maximum(charge["pem_power_W"], 0) if len(charge) > 1 else pd.Series(dtype=float)
+    discharge_power = abs(usable["pem_power_W"]) if len(usable) > 1 else pd.Series(dtype=float)
 
-    if len(usable) > 1:
-        discharge_power = abs(usable["pem_power_W"])
-        output_energy_j = integrate_energy(usable["local_time_s"], discharge_power)
-
-        usable_discharge_duration_s = usable["local_time_s"].iloc[-1] - usable["local_time_s"].iloc[0]
-        avg_usable_power_w = discharge_power.mean()
-        avg_usable_voltage_v = usable["pem_voltage_V"].mean()
-        avg_usable_current_a = abs(usable["pem_current_A"]).mean()
-    else:
-        output_energy_j = 0.0
-        usable_discharge_duration_s = 0.0
-        avg_usable_power_w = 0.0
-        avg_usable_voltage_v = 0.0
-        avg_usable_current_a = 0.0
-
-    hydrogen_per_input_energy = (
-        hydrogen_volume_mL / input_energy_j
-        if input_energy_j > 0 and not pd.isna(hydrogen_volume_mL)
-        else np.nan
-    )
+    input_energy_j = integrate(charge["local_time_s"], charge_power) if len(charge) > 1 else 0.0
+    output_energy_j = integrate(usable["local_time_s"], discharge_power) if len(usable) > 1 else 0.0
 
     return {
         "file": file_path.name,
         "charge_current_setpoint_A": current_a,
         "charge_duration_setpoint_s": duration_s,
         "repeat": repeat,
-        "hydrogen_volume_mL": hydrogen_volume_mL,
-        "hydrogen_per_input_energy_mL_per_J": hydrogen_per_input_energy,
-        "measured_charge_duration_s": measured_charge_duration_s,
-        "avg_charge_voltage_V": avg_charge_voltage_v,
-        "avg_charge_current_A": avg_charge_current_a,
-        "avg_charge_power_W": avg_charge_power_w,
+        "hydrogen_volume_mL": h2_mL,
+        "hydrogen_per_input_energy_mL_per_J": h2_mL / input_energy_j if input_energy_j > 0 else np.nan,
+        "measured_charge_duration_s": float(charge["local_time_s"].iloc[-1]) if len(charge) > 1 else 0.0,
+        "avg_charge_voltage_V": float(charge["pem_voltage_V"].mean()) if len(charge) > 1 else 0.0,
+        "avg_charge_current_A": float(charge["pem_current_A"].mean()) if len(charge) > 1 else 0.0,
+        "avg_charge_power_W": float(charge_power.mean()) if len(charge_power) > 0 else 0.0,
         "input_energy_J": input_energy_j,
-        "measured_discharge_duration_s": measured_discharge_duration_s,
-        "usable_discharge_duration_s": usable_discharge_duration_s,
-        "avg_usable_voltage_V": avg_usable_voltage_v,
-        "avg_usable_current_A": avg_usable_current_a,
-        "avg_usable_power_W": avg_usable_power_w,
+        "measured_discharge_duration_s": float(discharge["local_time_s"].iloc[-1]) if len(discharge) > 1 else 0.0,
+        "usable_discharge_duration_s": float(usable["local_time_s"].iloc[-1] - usable["local_time_s"].iloc[0]) if len(usable) > 1 else 0.0,
+        "avg_usable_voltage_V": float(usable["pem_voltage_V"].mean()) if len(usable) > 1 else 0.0,
+        "avg_usable_current_A": float(abs(usable["pem_current_A"]).mean()) if len(usable) > 1 else 0.0,
+        "avg_usable_power_W": float(discharge_power.mean()) if len(discharge_power) > 0 else 0.0,
         "output_energy_J": output_energy_j,
-        "min_discharge_voltage_V": min_discharge_voltage_v,
-        "max_discharge_voltage_V": max_discharge_voltage_v,
-        "max_discharge_current_A": max_discharge_current_a,
+        "min_discharge_voltage_V": float(discharge["pem_voltage_V"].min()) if len(discharge) > 1 else 0.0,
+        "max_discharge_voltage_V": float(discharge["pem_voltage_V"].max()) if len(discharge) > 1 else 0.0,
+        "max_discharge_current_A": float(abs(discharge["pem_current_A"]).max()) if len(discharge) > 1 else 0.0,
     }
 
 
-def find_first_sustained_time(segment, current_threshold_a, consecutive_points=3):
-    if len(segment) == 0:
+def summarize_charge_discharge_tests(volume_data, cutoff_voltage):
+    rows = []
+
+    for file_path in sorted(CHARGE_DISCHARGE_DIR.glob("*.csv")):
+        current_a, duration_s, _ = extract_test_info(file_path)
+        if pd.isna(current_a) or pd.isna(duration_s):
+            continue
+
+        try:
+            rows.append(summarize_charge_discharge_file(file_path, volume_data, cutoff_voltage))
+        except ValueError as error:
+            print(f"Skipping {file_path.name}: {error}")
+
+    return pd.DataFrame(rows)
+
+
+def first_sustained_time(segment, threshold_a, points=3):
+    if len(segment) < points:
         return np.nan
 
-    current_abs = abs(segment["pem_current_A"]).to_numpy()
-    sustained = current_abs >= current_threshold_a
-
-    if len(sustained) < consecutive_points:
-        return np.nan
-
-    window = np.convolve(
-        sustained.astype(int),
-        np.ones(consecutive_points, dtype=int),
-        mode="valid",
-    )
-    indices = np.where(window == consecutive_points)[0]
+    sustained = (abs(segment["pem_current_A"]) >= threshold_a).to_numpy()
+    window = np.convolve(sustained.astype(int), np.ones(points, dtype=int), mode="valid")
+    indices = np.where(window == points)[0]
 
     if len(indices) == 0:
         return np.nan
@@ -432,62 +383,45 @@ def find_first_sustained_time(segment, current_threshold_a, consecutive_points=3
     return float(segment["local_time_s"].iloc[indices[0]])
 
 
-def summarize_full_cycle(file_path, cutoff_voltage):
-    df = read_log(file_path)
+def summarize_full_cycle(cutoff_voltage):
+    df = read_log(FULL_CYCLE_FILE)
     charge, discharge = split_charge_discharge(df)
+    usable = discharge[discharge["pem_voltage_V"] >= cutoff_voltage].copy()
 
-    if len(charge) == 0 or len(discharge) == 0:
-        raise ValueError(f"Could not find both charge and discharge segments in {file_path.name}")
+    charge_energy_j = integrate(charge["local_time_s"], np.maximum(charge["pem_power_W"], 0))
+    output_energy_j = integrate(usable["local_time_s"], abs(usable["pem_power_W"]))
 
-    full_cycle = {
-        "file": file_path.name,
-        "charge_duration_s": float(charge["local_time_s"].iloc[-1]),
-        "discharge_duration_s": float(discharge["local_time_s"].iloc[-1]),
-        "startup_delay_s": find_first_sustained_time(discharge, 0.01),
-        "stable_output_delay_s": find_first_sustained_time(discharge, 0.05),
-        "charge_input_energy_J": integrate_energy(
-            charge["local_time_s"],
-            np.maximum(charge["pem_power_W"], 0),
-        ),
-        "usable_output_energy_J": integrate_energy(
-            discharge.loc[discharge["pem_voltage_V"] >= cutoff_voltage, "local_time_s"],
-            abs(discharge.loc[discharge["pem_voltage_V"] >= cutoff_voltage, "pem_power_W"]),
-        ),
-        "peak_output_power_W": float(abs(discharge["pem_power_W"]).max()),
-        "max_charge_power_W": float(np.maximum(charge["pem_power_W"], 0).max()),
-        "charge_end_voltage_V": float(charge["pem_voltage_V"].iloc[-1]),
-        "discharge_start_voltage_V": float(discharge["pem_voltage_V"].iloc[0]),
-        "discharge_min_voltage_V": float(discharge["pem_voltage_V"].min()),
-        "cutoff_voltage_V": float(cutoff_voltage),
-    }
+    summary = pd.DataFrame([
+        {
+            "file": FULL_CYCLE_FILE.name,
+            "charge_duration_s": float(charge["local_time_s"].iloc[-1]),
+            "discharge_duration_s": float(discharge["local_time_s"].iloc[-1]),
+            "usable_discharge_duration_s": float(usable["local_time_s"].max()) if len(usable) > 0 else 0.0,
+            "startup_delay_s": first_sustained_time(discharge, 0.01),
+            "stable_output_delay_s": first_sustained_time(discharge, 0.05),
+            "charge_input_energy_J": charge_energy_j,
+            "usable_output_energy_J": output_energy_j,
+            "energy_efficiency_pct": 100.0 * output_energy_j / charge_energy_j if charge_energy_j > 0 else np.nan,
+            "peak_output_power_W": float(abs(discharge["pem_power_W"]).max()),
+            "max_charge_power_W": float(np.maximum(charge["pem_power_W"], 0).max()),
+            "charge_end_voltage_V": float(charge["pem_voltage_V"].iloc[-1]),
+            "discharge_start_voltage_V": float(discharge["pem_voltage_V"].iloc[0]),
+            "discharge_min_voltage_V": float(discharge["pem_voltage_V"].min()),
+            "cutoff_voltage_V": float(cutoff_voltage),
+        }
+    ])
 
-    full_cycle["usable_discharge_duration_s"] = float(
-        discharge.loc[discharge["pem_voltage_V"] >= cutoff_voltage, "local_time_s"].max()
-    )
-    full_cycle["energy_efficiency_pct"] = (
-        100.0 * full_cycle["usable_output_energy_J"] / full_cycle["charge_input_energy_J"]
-        if full_cycle["charge_input_energy_J"] > 0
-        else np.nan
-    )
-
-    return pd.DataFrame([full_cycle]), charge, discharge
+    return summary, charge, discharge
 
 
 def make_state_table(summary):
-    table = summary.copy()
-    table = table.sort_values("output_energy_J").reset_index(drop=True)
+    table = summary.sort_values("output_energy_J").reset_index(drop=True).copy()
+    labels = ["EMPTY", "LOW", "MEDIUM", "HIGH", "FULL"]
 
-    state_labels = ["EMPTY", "LOW", "MEDIUM", "HIGH", "FULL"]
-
-    if len(table) <= len(state_labels):
-        table["pem_state"] = state_labels[:len(table)]
+    if len(table) <= len(labels):
+        table["pem_state"] = labels[:len(table)]
     else:
-        table["pem_state"] = pd.qcut(
-            table["output_energy_J"],
-            q=len(state_labels),
-            labels=state_labels,
-            duplicates="drop"
-        )
+        table["pem_state"] = pd.qcut(table["output_energy_J"], len(labels), labels=labels, duplicates="drop")
 
     table["ems_state"] = table["pem_state"].map({
         "EMPTY": "LOW",
@@ -514,203 +448,76 @@ def make_state_table(summary):
 
 
 def make_control_parameters(summary, sweep_summary, cutoff_voltage, full_cycle_summary):
-    usable = summary[
-        (summary["usable_discharge_duration_s"] > 0)
-        & (summary["output_energy_J"] > 0)
-    ]
+    usable = summary[(summary["usable_discharge_duration_s"] > 0) & (summary["output_energy_J"] > 0)]
+    with_h2 = usable.dropna(subset=["hydrogen_volume_mL", "hydrogen_per_input_energy_mL_per_J"])
 
-    if len(usable) > 0:
-        minimum_hydrogen_level_mL = usable["hydrogen_volume_mL"].min()
-        minimum_charge_time_s = usable["charge_duration_setpoint_s"].min()
-    else:
-        minimum_hydrogen_level_mL = np.nan
-        minimum_charge_time_s = np.nan
-
-    if len(sweep_summary) > 0:
-        maximum_usable_discharge_current_A = sweep_summary["max_sustainable_current_A"].min()
-    else:
-        maximum_usable_discharge_current_A = summary["max_discharge_current_A"].max()
-
-    with_hydrogen = usable.dropna(
-        subset=[
-            "hydrogen_volume_mL",
-            "hydrogen_per_input_energy_mL_per_J",
-        ]
-    ).copy()
-    output_per_hydrogen = with_hydrogen["output_energy_J"] / with_hydrogen["hydrogen_volume_mL"]
-    hydrogen_consumption = 1.0 / output_per_hydrogen.replace(0, np.nan)
-
-    hydrogen_production_rate = (
-        float(with_hydrogen["hydrogen_per_input_energy_mL_per_J"].median())
-        if len(with_hydrogen) > 0
-        else 0.08
-    )
-    hydrogen_consumption_rate = (
-        float(hydrogen_consumption.median())
-        if len(hydrogen_consumption.dropna()) > 0
-        else (6.0 / 14.0)
-    )
-
-    if len(full_cycle_summary) > 0:
-        startup_delay_s = float(full_cycle_summary.iloc[0]["startup_delay_s"])
-        stable_output_delay_s = float(full_cycle_summary.iloc[0]["stable_output_delay_s"])
-    else:
-        startup_delay_s = np.nan
-        stable_output_delay_s = np.nan
-
-    minimum_switch_time_s = startup_delay_s if not pd.isna(startup_delay_s) else 2.0
+    output_per_h2 = with_h2["output_energy_J"] / with_h2["hydrogen_volume_mL"]
+    h2_consumption = 1.0 / output_per_h2.replace(0, np.nan)
 
     return pd.DataFrame([
         {
-            "minimum_hydrogen_level_for_discharge_mL": minimum_hydrogen_level_mL,
+            "minimum_hydrogen_level_for_discharge_mL": float(usable["hydrogen_volume_mL"].min()) if len(usable) > 0 else np.nan,
             "minimum_usable_fuel_cell_voltage_V": cutoff_voltage,
-            "maximum_usable_discharge_current_A": maximum_usable_discharge_current_A,
+            "maximum_usable_discharge_current_A": float(sweep_summary.iloc[0]["max_sustainable_current_A"]),
+            "maximum_usable_discharge_power_W": float(sweep_summary.iloc[0]["max_sustainable_power_W"]),
             "maximum_electrolysis_current_A": MAX_ELECTROLYSIS_CURRENT_A,
-            "minimum_charge_time_before_useful_discharge_s": minimum_charge_time_s,
-            "minimum_time_before_switching_mode_s": minimum_switch_time_s,
-            "hydrogen_production_mL_per_input_J": hydrogen_production_rate,
-            "hydrogen_consumption_mL_per_output_J": hydrogen_consumption_rate,
-            "pem_startup_delay_s": startup_delay_s,
-            "pem_stable_output_delay_s": stable_output_delay_s,
+            "minimum_charge_time_before_useful_discharge_s": float(usable["charge_duration_setpoint_s"].min()) if len(usable) > 0 else np.nan,
+            "minimum_time_before_switching_mode_s": float(full_cycle_summary.iloc[0]["startup_delay_s"]),
+            "hydrogen_production_mL_per_input_J": float(with_h2["hydrogen_per_input_energy_mL_per_J"].median()) if len(with_h2) > 0 else np.nan,
+            "hydrogen_consumption_mL_per_output_J": float(h2_consumption.median()) if len(h2_consumption.dropna()) > 0 else np.nan,
+            "pem_startup_delay_s": float(full_cycle_summary.iloc[0]["startup_delay_s"]),
+            "pem_stable_output_delay_s": float(full_cycle_summary.iloc[0]["stable_output_delay_s"]),
         }
     ])
 
 
-def get_plot_color(current_a, duration_s):
+def test_color(current_a):
     return CURRENT_COLORS.get(round(float(current_a), 1), BLUE)
 
 
-def get_duration_alpha(duration_s):
+def duration_alpha(duration_s):
     if duration_s == 30:
         return 0.45
     if duration_s == 60:
         return 0.70
-    return 1.00
+
+    return 1.0
 
 
-THRESHOLD_GREY = "#4A4A4A"
-
-
-def add_pem_curve_legend(ax, curve_handles, cutoff_handle=None):
-    legend_handles = curve_handles.copy()
-    if cutoff_handle is not None:
-        legend_handles.append(cutoff_handle)
-
-    ax.legend(
-        handles=legend_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        ncol=1,
-        borderaxespad=0,
-    )
-
-
-def collect_charge_discharge_curves():
-    plot_data = []
-
-    for file_path in CHARGE_DISCHARGE_DIR.glob("*.csv"):
-        try:
-            current_a, duration_s, _ = extract_test_info(file_path)
-
-            # Skip files that don't match the expected naming pattern
-            if current_a is None or duration_s is None:
-                continue
-
-            df = read_log(file_path)
-            charge, discharge = split_charge_discharge(df, duration_s)
-        except ValueError as error:
-            print(f"Skipping {file_path.name}: {error}")
+def collect_curves():
+    curves = []
+    for file_path in sorted(CHARGE_DISCHARGE_DIR.glob("*.csv")):
+        current_a, duration_s, _ = extract_test_info(file_path)
+        if pd.isna(current_a) or pd.isna(duration_s):
             continue
 
+        df = read_log(file_path)
+        charge, discharge = split_charge_discharge(df, duration_s)
         if len(charge) > 1 and len(discharge) > 1:
-            plot_data.append((duration_s, current_a, charge, discharge, file_path))
+            curves.append((current_a, duration_s, charge, discharge))
 
-    return sorted(plot_data, key=lambda x: (x[1], x[0]))
-
-
-def plot_charge_power():
-    set_report_style()
-    fig, ax = plt.subplots(figsize=(7.4, 4.8))
-
-    plot_data = collect_charge_discharge_curves()
-    curve_handles = []
-
-    for duration_s, current_a, charge, _, file_path in plot_data:
-        label = f"{int(current_a * 1000)} mA, {duration_s} s"
-        color = get_plot_color(current_a, duration_s)
-
-        line = ax.plot(
-            charge["local_time_s"],
-            np.maximum(charge["pem_power_W"], 0) * 1000,
-            label=label,
-            color=color,
-            alpha=get_duration_alpha(duration_s),
-        )[0]
-        curve_handles.append(line)
-
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Input power [mW]")
-    ax.set_title("PEM Charging Power")
-    add_pem_curve_legend(ax, curve_handles)
-    polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pem_charging_power.png")
+    return sorted(curves, key=lambda item: (item[0], item[1]))
 
 
-def plot_discharge_voltage(cutoff_voltage):
-    set_report_style()
-    fig, ax = plt.subplots(figsize=(7.4, 4.8))
-
-    plot_data = collect_charge_discharge_curves()
-    curve_handles = []
-
-    for duration_s, current_a, _, discharge, file_path in plot_data:
-        label = f"{int(current_a * 1000)} mA, {duration_s} s"
-        color = get_plot_color(current_a, duration_s)
-
-        line = ax.plot(
-            discharge["local_time_s"],
-            discharge["pem_voltage_V"],
-            label=label,
-            color=color,
-            alpha=get_duration_alpha(duration_s),
-        )[0]
-        curve_handles.append(line)
-
-    cutoff_handle = ax.axhline(
-        cutoff_voltage,
-        color=THRESHOLD_GREY,
-        linestyle="--",
-        linewidth=1.8,
-        label=f"Cutoff: {cutoff_voltage:.3f} V",
-    )
-
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Voltage [V]")
-    ax.set_title("PEM Discharge Voltage")
-    add_pem_curve_legend(ax, curve_handles, cutoff_handle)
-    polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pem_discharge_voltage.png")
-
-
-def plot_charge_discharge_subplot(cutoff_voltage):
+def plot_charge_discharge(cutoff_voltage):
     set_report_style()
     fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8))
     charge_ax, discharge_ax = axes
-    curve_handles = []
+    legend_handles = []
 
-    for duration_s, current_a, charge, discharge, _ in collect_charge_discharge_curves():
-        label = f"{int(current_a * 1000)} mA, {duration_s} s"
-        color = get_plot_color(current_a, duration_s)
-        alpha = get_duration_alpha(duration_s)
+    for current_a, duration_s, charge, discharge in collect_curves():
+        label = f"{int(current_a * 1000)} mA, {duration_s:.0f} s"
+        color = test_color(current_a)
+        alpha = duration_alpha(duration_s)
 
-        charge_line = charge_ax.plot(
+        line = charge_ax.plot(
             charge["local_time_s"],
             np.maximum(charge["pem_power_W"], 0) * 1000,
-            label=label,
             color=color,
             alpha=alpha,
+            label=label,
         )[0]
-        curve_handles.append(charge_line)
+        legend_handles.append(line)
 
         discharge_ax.plot(
             discharge["local_time_s"],
@@ -721,7 +528,7 @@ def plot_charge_discharge_subplot(cutoff_voltage):
 
     cutoff_handle = discharge_ax.axhline(
         cutoff_voltage,
-        color=THRESHOLD_GREY,
+        color="#4A4A4A",
         linestyle="--",
         linewidth=1.8,
         label=f"Cutoff: {cutoff_voltage:.3f} V",
@@ -738,10 +545,8 @@ def plot_charge_discharge_subplot(cutoff_voltage):
     polish_axes(discharge_ax)
 
     blank = Line2D([], [], linestyle="none", label="")
-    legend_handles = curve_handles + [cutoff_handle, blank, blank]
-
     fig.legend(
-        handles=legend_handles,
+        handles=legend_handles + [cutoff_handle, blank, blank],
         loc="upper center",
         bbox_to_anchor=(0.5, 0.03),
         ncol=4,
@@ -752,50 +557,26 @@ def plot_charge_discharge_subplot(cutoff_voltage):
     plt.close(fig)
 
 
-def plot_output_energy(summary):
+def plot_summary_lines(summary, x_col, y_col, ylabel, title, output_name):
     set_report_style()
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
 
     for current_a, group in summary.groupby("charge_current_setpoint_A"):
-        group = group.sort_values("charge_duration_setpoint_s")
-
+        group = group.sort_values(x_col)
         ax.plot(
-            group["charge_duration_setpoint_s"],
-            group["output_energy_J"],
+            group[x_col],
+            group[y_col],
             marker="o",
-            color=get_plot_color(current_a, None),
-            label=f"{int(current_a * 1000)} mA"
+            color=test_color(current_a),
+            label=f"{int(current_a * 1000)} mA",
         )
 
     ax.set_xlabel("Charge duration [s]")
-    ax.set_ylabel("Output energy [J]")
-    ax.set_title("PEM Output Energy After Charging")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
     ax.legend(loc="best")
     polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pem_output_energy_vs_charge_time.png")
-
-
-def plot_hydrogen_volume(summary):
-    set_report_style()
-    fig, ax = plt.subplots(figsize=(8.0, 4.8))
-
-    for current_a, group in summary.groupby("charge_current_setpoint_A"):
-        group = group.sort_values("charge_duration_setpoint_s")
-
-        ax.plot(
-            group["charge_duration_setpoint_s"],
-            group["hydrogen_volume_mL"],
-            marker="o",
-            color=get_plot_color(current_a, None),
-            label=f"{int(current_a * 1000)} mA"
-        )
-
-    ax.set_xlabel("Charge duration [s]")
-    ax.set_ylabel("Hydrogen volume [mL]")
-    ax.set_title("Hydrogen Production During PEM Charging")
-    ax.legend(loc="best")
-    polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pem_hydrogen_volume_vs_charge_time.png")
+    save_report_figure(fig, PLOT_DIR / output_name)
 
 
 def plot_output_energy_vs_hydrogen(summary):
@@ -807,7 +588,7 @@ def plot_output_energy_vs_hydrogen(summary):
             group["hydrogen_volume_mL"],
             group["output_energy_J"],
             s=70,
-            color=get_plot_color(current_a, None),
+            color=test_color(current_a),
             label=f"{int(current_a * 1000)} mA",
         )
 
@@ -819,117 +600,26 @@ def plot_output_energy_vs_hydrogen(summary):
     save_report_figure(fig, PLOT_DIR / "pem_output_energy_vs_hydrogen_volume.png")
 
 
-def plot_sweep(cutoff_voltage):
-    set_report_style()
-    fig, ax = plt.subplots(figsize=(8.0, 4.8))
-
-    for file_path in sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv")):
-        try:
-            df = read_log(file_path)
-        except ValueError as error:
-            print(f"Skipping {file_path.name}: {error}")
-            continue
-
-        sweep = df.copy()
-        sweep["current_mA_abs"] = abs(sweep["pem_current_A"]) * 1000
-        sweep["current_step_mA"] = (sweep["current_mA_abs"] / 10).round() * 10
-
-        sweep_grouped = sweep.groupby("current_step_mA").agg(
-            voltage_mean_V=("pem_voltage_V", "mean")
-        ).reset_index()
-
-        sweep_grouped = sweep_grouped.sort_values("current_step_mA")
-
-        ax.plot(
-            sweep_grouped["current_step_mA"],
-            sweep_grouped["voltage_mean_V"],
-            marker="o",
-            color=BLUE,
-            label=file_path.stem
-        )
-
-    ax.axhline(
-        cutoff_voltage,
-        color=GREY,
-        linestyle="dashed",
-    )
-    ax.text(
-        0.98,
-        cutoff_voltage + 0.015,
-        f"Cutoff voltage: {cutoff_voltage:.3f} V",
-        color=GREY,
-        ha="right",
-        va="bottom",
-        transform=ax.get_yaxis_transform(),
-        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85, "pad": 2},
-    )
-
-    ax.set_xlabel("Current [mA]")
-    ax.set_ylabel("Voltage [V]")
-    ax.set_title("PEM Voltage During Current Sweep")
-    ax.legend(loc="best")
-    polish_axes(ax)
-    save_report_figure(fig, PLOT_DIR / "pem_iv_curve.png")
-
-
 def plot_full_cycle(charge, discharge, cutoff_voltage, full_cycle_summary):
     set_report_style()
     fig, axes = plt.subplots(2, 1, figsize=(8.2, 6.4), sharex=True)
     power_ax, voltage_ax = axes
+
     discharge_offset_s = float(charge["local_time_s"].iloc[-1]) + 10.0
     discharge_time_s = discharge["local_time_s"] + discharge_offset_s
 
-    power_ax.plot(
-        charge["local_time_s"],
-        np.maximum(charge["pem_power_W"], 0) * 1000,
-        color=GREEN,
-        label="Charge input power",
-    )
-    power_ax.plot(
-        discharge_time_s,
-        abs(discharge["pem_power_W"]) * 1000,
-        color=PURPLE,
-        label="Discharge output power",
-    )
+    power_ax.plot(charge["local_time_s"], np.maximum(charge["pem_power_W"], 0) * 1000, color=GREEN, label="Charge input power")
+    power_ax.plot(discharge_time_s, abs(discharge["pem_power_W"]) * 1000, color=PURPLE, label="Discharge output power")
+    voltage_ax.plot(charge["local_time_s"], charge["pem_voltage_V"], color=GREEN, label="Charge voltage")
+    voltage_ax.plot(discharge_time_s, discharge["pem_voltage_V"], color=PURPLE, label="Discharge voltage")
 
-    voltage_ax.plot(
-        charge["local_time_s"],
-        charge["pem_voltage_V"],
-        color=GREEN,
-        label="Charge voltage",
-    )
-    voltage_ax.plot(
-        discharge_time_s,
-        discharge["pem_voltage_V"],
-        color=PURPLE,
-        label="Discharge voltage",
-    )
+    row = full_cycle_summary.iloc[0]
+    if not pd.isna(row["startup_delay_s"]):
+        power_ax.axvline(discharge_offset_s + row["startup_delay_s"], color=GREY, linestyle=":", linewidth=1.6, label=f"Startup delay: {row['startup_delay_s']:.1f} s")
+    if not pd.isna(row["stable_output_delay_s"]):
+        power_ax.axvline(discharge_offset_s + row["stable_output_delay_s"], color=BLUE, linestyle="--", linewidth=1.6, label=f"Stable output: {row['stable_output_delay_s']:.1f} s")
 
-    summary_row = full_cycle_summary.iloc[0]
-    if not pd.isna(summary_row["startup_delay_s"]):
-        power_ax.axvline(
-            discharge_offset_s + summary_row["startup_delay_s"],
-            color=GREY,
-            linestyle=":",
-            linewidth=1.6,
-            label=f"Startup delay: {summary_row['startup_delay_s']:.1f} s",
-        )
-    if not pd.isna(summary_row["stable_output_delay_s"]):
-        power_ax.axvline(
-            discharge_offset_s + summary_row["stable_output_delay_s"],
-            color=BLUE,
-            linestyle="--",
-            linewidth=1.6,
-            label=f"Stable output: {summary_row['stable_output_delay_s']:.1f} s",
-        )
-
-    voltage_ax.axhline(
-        cutoff_voltage,
-        color=THRESHOLD_GREY,
-        linestyle="--",
-        linewidth=1.8,
-        label=f"Cutoff: {cutoff_voltage:.3f} V",
-    )
+    voltage_ax.axhline(cutoff_voltage, color="#4A4A4A", linestyle="--", linewidth=1.8, label=f"Cutoff: {cutoff_voltage:.3f} V")
 
     power_ax.set_ylabel("Power [mW]")
     power_ax.set_title("PEM Full Charge and Discharge Cycle", fontsize=18)
@@ -940,82 +630,65 @@ def plot_full_cycle(charge, discharge, cutoff_voltage, full_cycle_summary):
     voltage_ax.set_ylabel("Voltage [V]")
     voltage_ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
     polish_axes(voltage_ax)
+
     fig.tight_layout(rect=(0, 0, 0.8, 1))
     fig.savefig(PLOT_DIR / "pem_full_cycle.png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
 
-def main():
-    volume_data = load_volume_data()
-
-    sweep_rows = []
-
-    for file_path in sorted(SWEEP_DIR.glob("sweep_increasing_load*.csv")):
-        try:
-            sweep_rows.append(summarize_sweep(file_path))
-        except ValueError as error:
-            print(f"Skipping {file_path.name}: {error}")
-
-    sweep_summary = pd.DataFrame(sweep_rows)
-    cutoff_voltage = get_empirical_cutoff_voltage(sweep_summary)
-
-    combined_rows = []
-
-    for file_path in sorted(CHARGE_DISCHARGE_DIR.glob("*.csv")):
-        try:
-            combined_rows.append(
-                summarize_combined_file(file_path, volume_data, cutoff_voltage)
-            )
-        except ValueError as error:
-            print(f"Skipping {file_path.name}: {error}")
-
-    combined_summary = pd.DataFrame(combined_rows)
-    full_cycle_summary, full_cycle_charge, full_cycle_discharge = summarize_full_cycle(
-        FULL_CYCLE_FILE,
-        cutoff_voltage,
-    )
-
-    pem_state_table = make_state_table(combined_summary)
-    control_parameters = make_control_parameters(
-        combined_summary,
-        sweep_summary,
-        cutoff_voltage,
-        full_cycle_summary,
-    )
-
-    combined_summary.to_csv(OUTPUT_DIR / "pem_charge_discharge_summary.csv", index=False)
-    full_cycle_summary.to_csv(OUTPUT_DIR / "pem_full_cycle_summary.csv", index=False)
-    pem_state_table.to_csv(OUTPUT_DIR / "pem_state_table.csv", index=False)
+def save_outputs(sweep_summary, charge_summary, full_cycle_summary, state_table, control_parameters):
     sweep_summary.to_csv(OUTPUT_DIR / "current_sweep_summary.csv", index=False)
+    charge_summary.to_csv(OUTPUT_DIR / "pem_charge_discharge_summary.csv", index=False)
+    full_cycle_summary.to_csv(OUTPUT_DIR / "pem_full_cycle_summary.csv", index=False)
+    state_table.to_csv(OUTPUT_DIR / "pem_state_table.csv", index=False)
     control_parameters.to_csv(OUTPUT_DIR / "pem_control_parameters.csv", index=False)
 
-    plot_charge_power()
-    plot_discharge_voltage(cutoff_voltage)
-    plot_charge_discharge_subplot(cutoff_voltage)
-    plot_output_energy(combined_summary)
-    plot_hydrogen_volume(combined_summary)
-    plot_output_energy_vs_hydrogen(combined_summary)
-    plot_sweep(cutoff_voltage)
+
+def make_plots(charge_summary, cutoff_voltage, full_cycle_charge, full_cycle_discharge, full_cycle_summary):
+    plot_charge_discharge(cutoff_voltage)
+    plot_summary_lines(
+        charge_summary,
+        "charge_duration_setpoint_s",
+        "output_energy_J",
+        "Output energy [J]",
+        "PEM Output Energy After Charging",
+        "pem_output_energy_vs_charge_time.png",
+    )
+    plot_summary_lines(
+        charge_summary,
+        "charge_duration_setpoint_s",
+        "hydrogen_volume_mL",
+        "Hydrogen volume [mL]",
+        "Hydrogen Production During PEM Charging",
+        "pem_hydrogen_volume_vs_charge_time.png",
+    )
+    plot_output_energy_vs_hydrogen(charge_summary)
     plot_full_cycle(full_cycle_charge, full_cycle_discharge, cutoff_voltage, full_cycle_summary)
 
-    print("\nPEM state table:")
-    print(pem_state_table)
 
+def main():
+    volume_data = load_volume_data()
+    sweep_summary = summarize_sweep()
+    cutoff_voltage = float(sweep_summary.iloc[0]["collapse_voltage_V"])
+
+    charge_summary = summarize_charge_discharge_tests(volume_data, cutoff_voltage)
+    full_cycle_summary, full_cycle_charge, full_cycle_discharge = summarize_full_cycle(cutoff_voltage)
+    state_table = make_state_table(charge_summary)
+    control_parameters = make_control_parameters(charge_summary, sweep_summary, cutoff_voltage, full_cycle_summary)
+
+    save_outputs(sweep_summary, charge_summary, full_cycle_summary, state_table, control_parameters)
+    make_plots(charge_summary, cutoff_voltage, full_cycle_charge, full_cycle_discharge, full_cycle_summary)
+
+    print("\nPEM state table:")
+    print(state_table)
     print("\nPEM control parameters:")
     print(control_parameters)
-
     print("\nCurrent sweep summary:")
     print(sweep_summary)
-
     print("\nPEM full cycle summary:")
     print(full_cycle_summary)
-
-    print("\nEmpirical cutoff voltage:")
-    print(cutoff_voltage)
-
     print("\nSaved output files in:")
     print(OUTPUT_DIR)
-
     print("\nSaved plots in:")
     print(PLOT_DIR)
 
