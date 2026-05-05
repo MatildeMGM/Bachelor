@@ -68,6 +68,11 @@ float Loadcurrent = 0.0;
 float PEMcurrent = 0.0;
 float Batcurrent = 0.0;
 
+float PVshuntVoltage_mV = 0.0;
+float LoadshuntVoltage_mV = 0.0;
+float PEMshuntVoltage_mV = 0.0;
+float BatshuntVoltage_mV = 0.0;
+
 float PVpower = 0.0;
 float Loadpower = 0.0;
 float PEMpower = 0.0;
@@ -274,6 +279,11 @@ String get_status() {
   payload += ",PEMcurrent=" + String(PEMcurrent, 5);
   payload += ",Loadcurrent=" + String(Loadcurrent, 5);
 
+  payload += ",PVshunt_mV=" + String(PVshuntVoltage_mV, 5);
+  payload += ",Batshunt_mV=" + String(BatshuntVoltage_mV, 5);
+  payload += ",PEMshunt_mV=" + String(PEMshuntVoltage_mV, 5);
+  payload += ",Loadshunt_mV=" + String(LoadshuntVoltage_mV, 5);
+
   payload += ",PVpower=" + String(PVpower, 5);
   payload += ",Batterypower=" + String(Batterypower, 5);
   payload += ",PEMpower=" + String(PEMpower, 5);
@@ -362,45 +372,64 @@ void GetVoltage() {
   nominalVoltage = 5.0;
 
   if (inaBatOk) {
+    inaBat.readAndClearFlags();
     batteryVoltage = inaBat.getBusVoltage_V();
   }
 
   if (inaLoadOk) {
+    inaLoad.readAndClearFlags();
     loadVoltage = inaLoad.getBusVoltage_V();
   }
 
   if (inaPVOk) {
+    inaPV.readAndClearFlags();
     panelVoltage = inaPV.getBusVoltage_V();
   }
 
   if (inaPEMOk) {
+    inaPEM.readAndClearFlags();
     pemrfcVoltage = inaPEM.getBusVoltage_V();
   }
 }
 
 void GetCurrent() {
   if (inaBatOk) {
+    BatshuntVoltage_mV = inaBat.getShuntVoltage_mV();
     Batcurrent = inaBat.getCurrent_mA() / 1000.0;
   }
 
   if (inaLoadOk) {
+    LoadshuntVoltage_mV = inaLoad.getShuntVoltage_mV();
     Loadcurrent = inaLoad.getCurrent_mA() / 1000.0;
   }
 
   if (inaPVOk) {
+    PVshuntVoltage_mV = inaPV.getShuntVoltage_mV();
     PVcurrent = inaPV.getCurrent_mA() / 1000.0;
   }
 
   if (inaPEMOk) {
+    PEMshuntVoltage_mV = inaPEM.getShuntVoltage_mV();
     PEMcurrent = inaPEM.getCurrent_mA() / 1000.0;
   }
 }
 
 void GetPower() {
-  PVpower      = PVcurrent * panelVoltage;
-  Loadpower    = Loadcurrent * loadVoltage;
-  PEMpower     = PEMcurrent * pemrfcVoltage;
-  Batterypower = Batcurrent * batteryVoltage;
+  if (inaPVOk) {
+    PVpower = inaPV.getBusPower() / 1000.0;
+  }
+
+  if (inaLoadOk) {
+    Loadpower = inaLoad.getBusPower() / 1000.0;
+  }
+
+  if (inaPEMOk) {
+    PEMpower = inaPEM.getBusPower() / 1000.0;
+  }
+
+  if (inaBatOk) {
+    Batterypower = inaBat.getBusPower() / 1000.0;
+  }
 }
 
 float EstimateBatterySOCFromVoltage(float voltage) {
@@ -463,11 +492,22 @@ String GetBatteryChargeState(float soc) {
 }
 
 void PrintValues() {
-  Monitor.print("Nominal Voltage: ");
+  Monitor.print("INA OK Bat/Load/PV/PEM: ");
+  Monitor.print(inaBatOk ? 1 : 0);
+  Monitor.print("/");
+  Monitor.print(inaLoadOk ? 1 : 0);
+  Monitor.print("/");
+  Monitor.print(inaPVOk ? 1 : 0);
+  Monitor.print("/");
+  Monitor.print(inaPEMOk ? 1 : 0);
+
+  Monitor.print(" Nominal Voltage: ");
   Monitor.print(nominalVoltage);
 
   Monitor.print(" PV Current: ");
   Monitor.print(PVcurrent, 3);
+  Monitor.print(" PV Shunt mV: ");
+  Monitor.print(PVshuntVoltage_mV, 3);
   Monitor.print(" PV Voltage: ");
   Monitor.print(panelVoltage, 3);
   Monitor.print(" PV Power: ");
@@ -477,6 +517,8 @@ void PrintValues() {
   Monitor.print(batteryVoltage, 3);
   Monitor.print(" Battery Current: ");
   Monitor.print(Batcurrent, 3);
+  Monitor.print(" Battery Shunt mV: ");
+  Monitor.print(BatshuntVoltage_mV, 3);
   Monitor.print(" Battery Power: ");
   Monitor.print(Batterypower, 3);
   Monitor.print(" Battery SOC: ");
@@ -486,6 +528,8 @@ void PrintValues() {
 
   Monitor.print(" Load Current: ");
   Monitor.print(Loadcurrent, 3);
+  Monitor.print(" Load Shunt mV: ");
+  Monitor.print(LoadshuntVoltage_mV, 3);
   Monitor.print(" Load Voltage: ");
   Monitor.print(loadVoltage, 3);
   Monitor.print(" Load Power: ");
@@ -493,6 +537,8 @@ void PrintValues() {
 
   Monitor.print(" PEM RFC Current: ");
   Monitor.print(PEMcurrent, 3);
+  Monitor.print(" PEM RFC Shunt mV: ");
+  Monitor.print(PEMshuntVoltage_mV, 3);
   Monitor.print(" PEM RFC Voltage: ");
   Monitor.print(pemrfcVoltage, 3);
   Monitor.print(" PEM RFC Power: ");
