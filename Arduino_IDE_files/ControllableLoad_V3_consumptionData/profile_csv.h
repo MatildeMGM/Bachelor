@@ -1,3 +1,10 @@
+#pragma once
+
+// Generated from scaled_may_power_profile_15min.csv
+// Columns: time_slot,time_of_day,power_mW
+// The main .ino parser reads the last column as power_mW.
+
+const char PROFILE_CSV[] = R"CSV(
 time_slot,time_of_day,power_mW
 1,00:00,45.752107382290916
 2,00:15,45.04351593954704
@@ -95,3 +102,4 @@ time_slot,time_of_day,power_mW
 94,23:15,48.58917934037233
 95,23:30,47.64348868767852
 96,23:45,46.697798034984714
+)CSV";

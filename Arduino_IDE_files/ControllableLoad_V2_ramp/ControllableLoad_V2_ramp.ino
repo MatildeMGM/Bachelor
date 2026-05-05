@@ -53,7 +53,7 @@ float rampStartCurrent_A = 0.000f;
 float rampStep_A = 0.005f;            //0.005 = 5 mA
 float rampMaxCurrent_A = 0.500f;      //0.150 = 150 mA 
 
-unsigned long rampIntervalMs = 30000; // 5000 = 5 seconds
+unsigned long rampIntervalMs = 2000; // 5000 = 5 seconds
 unsigned long lastRampMs = 0;
 
 // -------------------------
