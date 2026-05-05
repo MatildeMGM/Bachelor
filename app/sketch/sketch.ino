@@ -22,9 +22,9 @@ const int K6 = 7;
 const int K7 = 9;
 
 // LED signal pins
-const int LEDS1 = 21;
+const int LEDS1 = 12;
 const int LEDS2 = 0;
-const int LEDS3 = 20;
+const int LEDS3 = 11;
 const int LEDS4 = 6;
 const int LEDS5 = 1;
 const int LEDS6 = 13;
@@ -53,7 +53,7 @@ const float PV_MIN_USABLE_VOLTAGE = 2.145;
 const float PV_MIN_LOAD_POWER_W = 0.050;
 const float PV_MIN_CHARGE_POWER_W = 0.023;
 const float PEM_MIN_USABLE_VOLTAGE = 0.4935;
-const float PEM_MAX_DISCHARGE_POWER_W = 0.094;
+const float PEM_MAX_DISCHARGE_POWER_W = 0.040;
 const float SAFETY_MARGIN_W = 0.005;
 
 // Measured values
@@ -72,6 +72,11 @@ float PVpower = 0.0;
 float Loadpower = 0.0;
 float PEMpower = 0.0;
 float Batterypower = 0.0;
+
+bool inaBatOk = false;
+bool inaLoadOk = false;
+bool inaPVOk = false;
+bool inaPEMOk = false;
 
 // Battery SOC variables
 float batterySOC = 0.0;
@@ -99,7 +104,7 @@ void GetPower();
 void UpdateBatterySOC();
 void PrintValues();
 
-void setupINA(INA226_WE &sensor, const char* name);
+bool setupINA(INA226_WE &sensor, const char* name);
 float EstimateBatterySOCFromVoltage(float voltage);
 String GetBatteryChargeState(float soc);
 
@@ -123,10 +128,10 @@ void setup() {
   Wire.begin();
   delay(500);
 
-  setupINA(inaBat, "INA226 Battery");
-  setupINA(inaLoad, "INA226 Load");
-  setupINA(inaPV, "INA226 PV");
-  setupINA(inaPEM, "INA226 PEMRFC");
+  inaBatOk = setupINA(inaBat, "INA226 Battery");
+  inaLoadOk = setupINA(inaLoad, "INA226 Load");
+  inaPVOk = setupINA(inaPV, "INA226 PV");
+  inaPEMOk = setupINA(inaPEM, "INA226 PEMRFC");
 
   pinMode(K1, OUTPUT);
   pinMode(K2, OUTPUT);
@@ -163,14 +168,14 @@ void loop() {
   delay(400);
 }
 
-void setupINA(INA226_WE &sensor, const char* name) {
+bool setupINA(INA226_WE &sensor, const char* name) {
   Monitor.print("Initializing ");
   Monitor.print(name);
   Monitor.print(" ... ");
 
   if (!sensor.init()) {
     Monitor.println("FAILED");
-    return;
+    return false;
   }
 
   sensor.setAverage(INA226_AVERAGE_16);
@@ -179,6 +184,7 @@ void setupINA(INA226_WE &sensor, const char* name) {
   sensor.waitUntilConversionCompleted();
 
   Monitor.println("OK");
+  return true;
 }
 
 bool apply_price_frame(String payload) {
@@ -224,11 +230,7 @@ bool apply_scenario_frame(String payload) {
   requestedDemand_mW = payload.substring(c3 + 1).toFloat();
   scenarioReceived = true;
 
-  GetVoltage();
-  GetCurrent();
-  GetPower();
-  UpdateBatterySOC();
-
+  // Use the latest measurements from loop() so the RPC handler stays responsive.
   float demandW = requestedDemand_mW / 1000.0;
 
   lastRejectReason = GetScenarioRejectReason(requestedScenario, demandW);
@@ -256,6 +258,11 @@ String get_status() {
 
   payload += "slot=" + String(priceSlot);
   payload += ",price=" + String(electricityprice, 5);
+
+  payload += ",inaBatOk=" + String(inaBatOk ? 1 : 0);
+  payload += ",inaLoadOk=" + String(inaLoadOk ? 1 : 0);
+  payload += ",inaPVOk=" + String(inaPVOk ? 1 : 0);
+  payload += ",inaPEMOk=" + String(inaPEMOk ? 1 : 0);
 
   payload += ",panelVoltage=" + String(panelVoltage, 5);
   payload += ",batteryVoltage=" + String(batteryVoltage, 5);
@@ -354,17 +361,39 @@ void ApplyScenario(int scenario) {
 void GetVoltage() {
   nominalVoltage = 5.0;
 
-  batteryVoltage = inaBat.getBusVoltage_V();
-  loadVoltage    = inaLoad.getBusVoltage_V();
-  panelVoltage   = inaPV.getBusVoltage_V();
-  pemrfcVoltage  = inaPEM.getBusVoltage_V();
+  if (inaBatOk) {
+    batteryVoltage = inaBat.getBusVoltage_V();
+  }
+
+  if (inaLoadOk) {
+    loadVoltage = inaLoad.getBusVoltage_V();
+  }
+
+  if (inaPVOk) {
+    panelVoltage = inaPV.getBusVoltage_V();
+  }
+
+  if (inaPEMOk) {
+    pemrfcVoltage = inaPEM.getBusVoltage_V();
+  }
 }
 
 void GetCurrent() {
-  Batcurrent  = inaBat.getCurrent_mA() / 1000.0;
-  Loadcurrent = inaLoad.getCurrent_mA() / 1000.0;
-  PVcurrent   = inaPV.getCurrent_mA() / 1000.0;
-  PEMcurrent  = inaPEM.getCurrent_mA() / 1000.0;
+  if (inaBatOk) {
+    Batcurrent = inaBat.getCurrent_mA() / 1000.0;
+  }
+
+  if (inaLoadOk) {
+    Loadcurrent = inaLoad.getCurrent_mA() / 1000.0;
+  }
+
+  if (inaPVOk) {
+    PVcurrent = inaPV.getCurrent_mA() / 1000.0;
+  }
+
+  if (inaPEMOk) {
+    PEMcurrent = inaPEM.getCurrent_mA() / 1000.0;
+  }
 }
 
 void GetPower() {

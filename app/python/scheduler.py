@@ -22,6 +22,7 @@ DEMAND_PROFILE_PATH = (
     / "variable_load_signal"
     / "scaled_may_power_profile_15min.csv"
 )
+MIN_DEMAND_POWER_MW = 20.0
 
 
 SCENARIO_DESCRIPTIONS = {
@@ -241,7 +242,9 @@ def load_scaled_demand_profile(path: Path | str = DEMAND_PROFILE_PATH) -> list[f
     df = pd.read_csv(path)
     if "power_mW" not in df.columns:
         raise ValueError("Demand profile must contain a power_mW column.")
-    return (df["power_mW"].astype(float) / 1000.0).tolist()
+
+    demand_mw = df["power_mW"].astype(float).clip(lower=MIN_DEMAND_POWER_MW)
+    return (demand_mw / 1000.0).tolist()
 
 
 def decide_current_scenario(

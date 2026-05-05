@@ -17,7 +17,7 @@ INPUT_FILES = [
 OUTPUT_FILE = SCRIPT_DIR / "typical_may_load_profile_15min.csv"
 
 # threshholds for scaling the load profile to a realistic range for the EMS
-MIN_POWER_MW = 0
+MIN_POWER_MW = 20
 MAX_POWER_MW = 150
 
 SCALED_OUTPUT_FILE = SCRIPT_DIR / "scaled_may_power_profile_15min.csv"

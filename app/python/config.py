@@ -10,7 +10,7 @@ BASE_URL = "https://api.energidataservice.dk/dataset/DayAheadPrices"
 DEFAULT_PRICE_ZONE = "DK2"
 VALID_PRICE_ZONES = ("DK1", "DK2")
 
-BRIDGE_TIMEOUT = 5
+BRIDGE_TIMEOUT = 20
 PRICE_REQUEST_TIMEOUT = 15
 LOOP_SLEEP_SECONDS = 2
 
