@@ -8,6 +8,9 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -21,7 +24,7 @@ def find_bachelor_dir():
 
 
 BACHELOR_DIR = find_bachelor_dir()
-sys.path.append(str(BACHELOR_DIR / "data_treatment"))
+sys.path.append(str(BACHELOR_DIR))
 
 from data_treatment.plots.plot_style import DISTANCE_COLORS, GREEN, PURPLE, BLUE, polish_axes, save_report_figure, set_report_style
 
@@ -69,8 +72,8 @@ def extract_distance_from_filename(file_path):
 def read_pv_log(file_path):
     """
     Read PV test log file and extract relevant sensor data.
-    ina2 is the PV panel (based on voltage 4.2-4.6V and positive current).
-    Uses raw data without calibration to avoid systematic errors.
+    ina3 is the PV panel in the EMS logger.
+    Uses raw data without calibration to match the PV ramp notebook analysis.
     """
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
@@ -79,10 +82,9 @@ def read_pv_log(file_path):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["time_s"] = (df["timestamp"] - df["timestamp"].iloc[0]).dt.total_seconds()
     
-    # Extract PV sensor data (ina2 - voltage 4.2-4.6V, positive current = supply)
-    # Use raw data without calibration since calibration constants may be for different sensor
-    df["pv_voltage_V"] = pd.to_numeric(df["ina2_bus_V"], errors="coerce")
-    df["pv_current_A"] = pd.to_numeric(df["ina2_current_mA"], errors="coerce") / 1000
+    # Extract PV sensor data (ina3 / 0x44).
+    df["pv_voltage_V"] = pd.to_numeric(df["ina3_bus_V"], errors="coerce")
+    df["pv_current_A"] = pd.to_numeric(df["ina3_current_mA"], errors="coerce") / 1000
     
     # Calculate power (positive = sourcing from PV)
     df["pv_power_mW"] = df["pv_voltage_V"] * df["pv_current_A"] * 1000
@@ -110,8 +112,9 @@ def identify_ramp_start(df, threshold_A=0.05):
 
 def extract_steady_state_metrics(df, start_idx=0):
     """
-    Extract steady-state metrics from the test data.
-    Assumes data ramped to maximum and held briefly.
+    Extract representative metrics from the PV load ramp.
+    The ramp sweeps through load points, so the maximum power point is more
+    meaningful than averaging the final part of the ramp.
     """
     if start_idx > 0 and start_idx < len(df):
         df = df.iloc[start_idx:].copy()
@@ -131,18 +134,14 @@ def extract_steady_state_metrics(df, start_idx=0):
         "max_power_mW": df["pv_power_mW"].max(),
         "avg_power_mW": df["pv_power_mW"].mean(),
     }
-    
-    # Estimate steady-state (last 20% of ramp)
-    ss_start = int(0.8 * len(df))
-    if ss_start < len(df):
-        ss_data = df.iloc[ss_start:]
-        metrics.update({
-            "ss_avg_voltage_V": ss_data["pv_voltage_V"].mean(),
-            "ss_avg_current_A": ss_data["pv_current_A"].mean(),
-            "ss_avg_power_mW": ss_data["pv_power_mW"].mean(),
-            "ss_min_power_mW": ss_data["pv_power_mW"].min(),
-            "ss_max_power_mW": ss_data["pv_power_mW"].max(),
-        })
+
+    mpp_idx = df["pv_power_mW"].idxmax()
+    mpp_row = df.loc[mpp_idx]
+    metrics.update({
+        "mpp_voltage_V": mpp_row["pv_voltage_V"],
+        "mpp_current_A": mpp_row["pv_current_A"],
+        "mpp_power_mW": mpp_row["pv_power_mW"],
+    })
     
     return metrics
 
@@ -168,8 +167,8 @@ def analyze_all_tests():
                 metrics["file"] = file_path.name
                 results.append(metrics)
                 
-                print(f"  Max Power: {metrics['ss_avg_power_mW']:.2f} mW @ {distance_cm} cm")
-                print(f"  Max Current: {metrics['ss_avg_current_A']:.3f} A")
+                print(f"  MPP Power: {metrics['mpp_power_mW']:.2f} mW @ {distance_cm} cm")
+                print(f"  MPP Current: {metrics['mpp_current_A']:.3f} A")
                 
         except Exception as e:
             print(f"  ERROR: {e}")
@@ -215,11 +214,11 @@ def create_pv_state_table(summary_df):
             "min_distance_cm": min_distance,
             "max_distance_cm": max_distance,
             "test_distances_cm": ", ".join(str(int(value)) for value in group["distance_cm"]),
-            "avg_voltage_V": group["ss_avg_voltage_V"].mean(),
-            "min_power_mW": group["ss_avg_power_mW"].min(),
-            "avg_power_mW": group["ss_avg_power_mW"].mean(),
-            "max_power_mW": group["ss_avg_power_mW"].max(),
-            "max_current_A": group["ss_avg_current_A"].max(),
+            "avg_voltage_V": group["mpp_voltage_V"].mean(),
+            "min_power_mW": group["mpp_power_mW"].min(),
+            "avg_power_mW": group["mpp_power_mW"].mean(),
+            "max_power_mW": group["mpp_power_mW"].max(),
+            "max_current_A": group["mpp_current_A"].max(),
         })
 
     return pd.DataFrame(states)
@@ -230,15 +229,15 @@ def create_operating_thresholds(summary_df, state_table):
     Create a control parameters table with key thresholds for algorithm.
     """
     # Find minimum usable voltage (lowest voltage with meaningful power)
-    min_voltage = summary_df["ss_avg_voltage_V"].min()
-    max_voltage = summary_df["ss_avg_voltage_V"].max()
+    min_voltage = summary_df["mpp_voltage_V"].min()
+    max_voltage = summary_df["mpp_voltage_V"].max()
     
     # Find maximum available current
-    max_current = summary_df["ss_avg_current_A"].max()
+    max_current = summary_df["mpp_current_A"].max()
     
     # Find power levels for decision thresholds
-    max_power = summary_df["ss_avg_power_mW"].max()
-    min_usable_power = summary_df["ss_avg_power_mW"].min() * 0.5  # Conservative estimate
+    max_power = summary_df["mpp_power_mW"].max()
+    min_usable_power = summary_df["mpp_power_mW"].min() * 0.5  # Conservative estimate
     
     thresholds = {
         "min_pv_voltage_V": [max(min_voltage - 0.1, 2.0)],  # Minimum voltage to expect PV
@@ -260,23 +259,15 @@ def generate_plots(summary_df, state_table):
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
     ax.plot(
         summary_df["distance_cm"],
-        summary_df["ss_avg_power_mW"],
+        summary_df["mpp_power_mW"],
         marker="o",
         color=BLUE,
-        label="Steady-state power",
-    )
-    ax.fill_between(
-        summary_df["distance_cm"],
-        summary_df["ss_min_power_mW"],
-        summary_df["ss_max_power_mW"],
-        color=BLUE,
-        alpha=0.16,
-        label="Observed range",
+        label="Maximum power point",
     )
     ax.invert_xaxis()
     ax.set_xlabel("Lamp distance [cm]")
     ax.set_ylabel("PV power [mW]")
-    ax.set_title("PV Power Under Different Illumination Levels")
+    ax.set_title("PV Maximum Power Under Different Illumination Levels")
     ax.legend(loc="upper right")
     polish_axes(ax)
     save_report_figure(fig, PLOT_DIR / "pv_power_vs_distance.png")
@@ -284,15 +275,15 @@ def generate_plots(summary_df, state_table):
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
     ax.plot(
         summary_df["distance_cm"],
-        summary_df["ss_avg_voltage_V"],
+        summary_df["mpp_voltage_V"],
         marker="o",
         color=GREEN,
-        label="Steady-state voltage",
+        label="Voltage at MPP",
     )
     ax.invert_xaxis()
     ax.set_xlabel("Lamp distance [cm]")
     ax.set_ylabel("PV voltage [V]")
-    ax.set_title("PV Voltage Under Different Illumination Levels")
+    ax.set_title("PV Voltage at Maximum Power")
     ax.legend(loc="best")
     polish_axes(ax)
     save_report_figure(fig, PLOT_DIR / "pv_voltage_vs_distance.png")
@@ -300,15 +291,15 @@ def generate_plots(summary_df, state_table):
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
     ax.plot(
         summary_df["distance_cm"],
-        summary_df["ss_avg_current_A"] * 1000,
+        summary_df["mpp_current_A"] * 1000,
         marker="o",
         color=PURPLE,
-        label="Steady-state current",
+        label="Current at MPP",
     )
     ax.invert_xaxis()
     ax.set_xlabel("Lamp distance [cm]")
     ax.set_ylabel("PV current [mA]")
-    ax.set_title("PV Current Under Different Illumination Levels")
+    ax.set_title("PV Current at Maximum Power")
     ax.legend(loc="best")
     polish_axes(ax)
     save_report_figure(fig, PLOT_DIR / "pv_current_vs_distance.png")
