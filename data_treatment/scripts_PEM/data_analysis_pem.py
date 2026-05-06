@@ -912,6 +912,107 @@ def plot_minimum_electrolysis_power(minimum_electrolysis_analysis, minimum_elect
     fig.savefig(PLOT_DIR / "pem_minimum_electrolysis_power.png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
+
+def plot_pem_charging_phase():
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(12.8, 5.4))
+
+    for current_a, duration_s, charge, _ in collect_curves():
+        label = f"{int(current_a * 1000)} mA, {duration_s:.0f} s"
+        ax.plot(
+            charge["local_time_s"],
+            np.maximum(charge["pem_power_W"], 0),
+            color=test_color(current_a),
+            alpha=duration_alpha(duration_s),
+            label=label,
+        )
+
+    ax.set_xlabel("Charge time [s]")
+    ax.set_ylabel("Corrected PEM charging power [W]")
+    ax.set_title("PEM Charging Phase")
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=4,
+        frameon=False,
+    )
+    polish_axes(ax)
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.32)
+    fig.savefig(PLOT_DIR / "pem_charging_phase_power.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
+def plot_full_cycle_corrected_measurements(minimum_usable_voltage_v):
+    df = read_log(FULL_CYCLE_FILE)
+    charge, discharge = split_charge_discharge(df)
+
+    set_report_style()
+    fig, axes = plt.subplots(3, 1, figsize=(12.8, 8.2), sharex=True)
+    voltage_ax, current_ax, power_ax = axes
+
+    voltage_ax.plot(
+        df["time_s"],
+        df["pem_voltage_V"],
+        color=GREY,
+        alpha=0.35,
+        linewidth=1.4,
+        label="Full corrected log",
+    )
+    current_ax.plot(
+        df["time_s"],
+        df["pem_current_A"] * 1000,
+        color=GREY,
+        alpha=0.35,
+        linewidth=1.4,
+    )
+    power_ax.plot(
+        df["time_s"],
+        df["pem_power_W"] * 1000,
+        color=GREY,
+        alpha=0.35,
+        linewidth=1.4,
+    )
+
+    for segment, color, label in [
+        (charge, GREEN, "Charge"),
+        (discharge, PURPLE, "Discharge"),
+    ]:
+        if len(segment) < 2:
+            continue
+
+        voltage_ax.plot(segment["time_s"], segment["pem_voltage_V"], color=color, label=label)
+        current_ax.plot(segment["time_s"], segment["pem_current_A"] * 1000, color=color)
+        power_ax.plot(segment["time_s"], segment["pem_power_W"] * 1000, color=color)
+
+    if not pd.isna(minimum_usable_voltage_v):
+        voltage_ax.axhline(
+            minimum_usable_voltage_v,
+            color="#4A4A4A",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Minimum usable: {minimum_usable_voltage_v:.3f} V",
+        )
+
+    voltage_ax.set_ylabel("Voltage [V]")
+    current_ax.set_ylabel("Current [mA]")
+    power_ax.set_ylabel("Power [mW]")
+    power_ax.set_xlabel("Time [s]")
+    voltage_ax.set_title("Corrected PEM Full Charge and Discharge Cycle")
+    voltage_ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.22),
+        ncol=4,
+        frameon=False,
+    )
+
+    for ax in axes:
+        polish_axes(ax)
+
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.92, bottom=0.12, hspace=0.28)
+    fig.savefig(PLOT_DIR / "pem_full_cycle_corrected_measurements.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
 def plot_charge_hydrogen_discharge_overview(charge_summary, minimum_usable_voltage_v, minimum_electrolysis_values):
     set_report_style()
     fig, axes = plt.subplots(2, 2, figsize=(13.2, 9.2))
@@ -1040,7 +1141,7 @@ def plot_discharge_collapse_diagnostics(collapse_points, minimum_usable_voltage_
         return
 
     set_report_style()
-    fig, ax = plt.subplots(figsize=(8.6, 5.2))
+    fig, ax = plt.subplots(figsize=(12.8, 5.4))
 
     for file_path in sorted(CHARGE_DISCHARGE_DIR.glob("*.csv")):
         current_a, duration_s, _ = extract_test_info(file_path)
@@ -1089,9 +1190,14 @@ def plot_discharge_collapse_diagnostics(collapse_points, minimum_usable_voltage_
     ax.set_xlabel("Discharge time [s]")
     ax.set_ylabel("Fuel cell voltage [V]")
     ax.set_title("PEM Discharge Collapse Detection")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=4,
+        frameon=False,
+    )
     polish_axes(ax)
-    fig.tight_layout(rect=(0, 0, 0.78, 1))
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.32)
     fig.savefig(PLOT_DIR / "pem_discharge_collapse_detection.png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
@@ -1398,6 +1504,46 @@ def plot_polarization_power_curve(minimum_usable_voltage_v, polarization=None):
     plt.close(fig)
 
 
+def plot_polarization_discharge_power_vs_current(polarization=None):
+    if polarization is None:
+        polarization = summarize_polarization_curve()
+    if len(polarization) == 0:
+        return
+
+    increasing = polarization[polarization["is_increasing_current"]].copy()
+    collapsed = polarization[~polarization["is_increasing_current"]].copy()
+
+    set_report_style()
+    fig, ax = plt.subplots(figsize=(8.2, 5.0))
+
+    if len(increasing) > 0:
+        ax.plot(
+            increasing["current_A"],
+            increasing["power_mW"],
+            marker="o",
+            color=PURPLE,
+            linewidth=1.9,
+            label="Increasing load steps",
+        )
+
+    if len(collapsed) > 0:
+        ax.scatter(
+            collapsed["current_A"],
+            collapsed["power_mW"],
+            s=42,
+            color=GREY,
+            alpha=0.75,
+            label="After voltage collapse",
+        )
+
+    ax.set_xlabel("Fuel cell current [A]")
+    ax.set_ylabel("Fuel cell output power [mW]")
+    ax.set_title("PEM Polarization Discharge Power")
+    ax.legend(loc="best")
+    polish_axes(ax)
+    save_report_figure(fig, PLOT_DIR / "pem_polarization_discharge_power_vs_current.png")
+
+
 def remove_obsolete_outputs():
     for path in OBSOLETE_OUTPUTS:
         if path.exists():
@@ -1444,9 +1590,12 @@ def make_plots(
         minimum_electrolysis_analysis,
         minimum_electrolysis_values,
     )
+    plot_pem_charging_phase()
+    plot_full_cycle_corrected_measurements(minimum_usable_voltage_v)
     plot_discharge_collapse_diagnostics(collapse_points, minimum_usable_voltage_v)
     plot_polarization_curve(minimum_usable_voltage_v, polarization_summary)
     plot_polarization_power_curve(minimum_usable_voltage_v, polarization_summary)
+    plot_polarization_discharge_power_vs_current(polarization_summary)
 
     return polarization_summary
 

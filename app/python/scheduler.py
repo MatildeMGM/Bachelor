@@ -23,6 +23,7 @@ DEMAND_PROFILE_PATH = (
     / "scaled_may_power_profile_15min.csv"
 )
 MIN_DEMAND_POWER_MW = 20.0
+TEMPORARY_PV_TO_PEM_CHARGE_POWER_MW = 20.0
 
 
 SCENARIO_DESCRIPTIONS = {
@@ -50,6 +51,7 @@ class BatteryLimits:
 @dataclass(frozen=True)
 class PEMLimits:
     min_voltage_v: float
+    minimum_electrolysis_power_w: float
     min_hydrogen_ml: float
     max_discharge_power_w: float
     full_hydrogen_ml: float
@@ -143,8 +145,14 @@ def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
         value_column="soc_min_percent",
         default=60.0,
     )
-    pv_charging_power_w = float(pv_params["min_usable_power_for_charging_mW"]) / 1000.0
-    pv_load_power_w = float(pv_params["min_usable_power_for_load_mW"]) / 1000.0
+    pv_battery_charging_power_w = (
+        float(pv_params["min_pv_power_for_battery_charging_mW"]) / 1000.0
+    )
+    # Temporary demo override: the experimentally defensible PV -> PEM
+    # threshold is higher than the measured PV ramp capability, so this keeps
+    # the app runnable while the hardware/control strategy is being tested.
+    pv_pem_charging_power_w = TEMPORARY_PV_TO_PEM_CHARGE_POWER_MW / 1000.0
+    pv_load_power_w = float(pv_params["min_pv_power_for_load_supply_mW"]) / 1000.0
     pem_hydrogen_production = pd.to_numeric(
         pem_params["hydrogen_production_mL_per_input_J"],
         errors="coerce",
@@ -194,6 +202,7 @@ def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
         ),
         pem=PEMLimits(
             min_voltage_v=float(pem_params["minimum_usable_fuel_cell_voltage_V"]),
+            minimum_electrolysis_power_w=float(pem_params["minimum_electrolysis_power_W"]),
             min_hydrogen_ml=pem_min_hydrogen,
             max_discharge_power_w=float(pem_params["maximum_usable_discharge_power_W"]),
             full_hydrogen_ml=float(pem_full_hydrogen),
@@ -206,18 +215,14 @@ def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
             startup_delay_s=float(pem_startup_delay),
         ),
         pv=PVLimits(
-            min_battery_charging_voltage_v=float(
-                pv_params["min_pv_voltage_for_charging_V"]
-            ),
-            min_pem_charging_voltage_v=float(
-                pv_params["min_pv_voltage_for_charging_V"]
-            ),
-            min_load_supply_voltage_v=float(pv_params["min_pv_voltage_for_load_V"]),
-            min_battery_charging_power_w=pv_charging_power_w,
-            min_pem_charging_power_w=pv_charging_power_w,
+            min_battery_charging_voltage_v=float(pv_params["min_pv_voltage_for_battery_charging_V"]),
+            min_pem_charging_voltage_v=0.0,
+            min_load_supply_voltage_v=float(pv_params["min_pv_voltage_for_load_supply_V"]),
+            min_battery_charging_power_w=pv_battery_charging_power_w,
+            min_pem_charging_power_w=pv_pem_charging_power_w,
             min_load_supply_power_w=pv_load_power_w,
-            max_power_w=float(pv_params["max_available_power_mW"]) / 1000.0,
-            medium_power_w=pv_charging_power_w,
+            max_power_w=float(pv_params["max_measured_pv_power_mW"]) / 1000.0,
+            medium_power_w=pv_pem_charging_power_w,
             high_power_w=pv_load_power_w,
         ),
     )
@@ -340,7 +345,10 @@ def estimate_live_pv_power_w(
 
     limits = limits or load_limits()
 
-    if component_state.pv_voltage_v < limits.pv.min_battery_charging_voltage_v:
+    if not _threshold_reached(
+        component_state.pv_voltage_v,
+        limits.pv.min_load_supply_voltage_v,
+    ):
         return 0.0
 
     if component_state.pv_power_w is not None:
@@ -414,11 +422,14 @@ def classify_pv(
     validate loaded PV power after switching.
     """
 
-    if pv_voltage_v < limits.pv.min_battery_charging_voltage_v:
-        return "low"
-    if pv_voltage_v < limits.pv.min_load_supply_voltage_v:
+    if _threshold_reached(pv_voltage_v, limits.pv.min_load_supply_voltage_v):
+        return "high"
+    if (
+        _threshold_reached(pv_voltage_v, limits.pv.min_battery_charging_voltage_v)
+        or _threshold_reached(pv_voltage_v, limits.pv.min_pem_charging_voltage_v)
+    ):
         return "medium"
-    return "high"
+    return "low"
 
 
 def classify_battery(
@@ -510,11 +521,12 @@ def get_eligible_scenarios(
     # Open-circuit PV voltage can be measured while PV is disconnected, but
     # open-circuit PV power cannot represent available power. Loaded power is
     # validated by Arduino after switching the relay scenario.
-    pv_can_feed_load = pv_voltage_v >= limits.pv.min_load_supply_voltage_v
-    pv_can_charge_battery = (
-        pv_voltage_v >= limits.pv.min_battery_charging_voltage_v
+    pv_can_feed_load = _threshold_reached(pv_voltage_v, limits.pv.min_load_supply_voltage_v)
+    pv_can_charge_battery = _threshold_reached(
+        pv_voltage_v,
+        limits.pv.min_battery_charging_voltage_v,
     )
-    pv_can_charge_pem = pv_voltage_v >= limits.pv.min_pem_charging_voltage_v
+    pv_can_charge_pem = _threshold_reached(pv_voltage_v, limits.pv.min_pem_charging_voltage_v)
 
     if pv_can_feed_load:
         eligible.add(4)
@@ -608,12 +620,12 @@ def build_scenario_command(
     safety_margin_mw = int(round(config.safety_margin_w * 1000.0))
     return (
         f"SCENARIO,{int(slot)},{int(scenario)},{demand_mw},"
-        f"{limits.pv.min_battery_charging_voltage_v:.5f},"
-        f"{limits.pv.min_battery_charging_power_w * 1000.0:.1f},"
-        f"{limits.pv.min_pem_charging_voltage_v:.5f},"
-        f"{limits.pv.min_pem_charging_power_w * 1000.0:.1f},"
-        f"{limits.pv.min_load_supply_voltage_v:.5f},"
-        f"{limits.pv.min_load_supply_power_w * 1000.0:.1f},"
+        f"{_command_voltage_threshold(limits.pv.min_battery_charging_voltage_v):.5f},"
+        f"{_command_power_mw(limits.pv.min_battery_charging_power_w):.1f},"
+        f"{_command_voltage_threshold(limits.pv.min_pem_charging_voltage_v):.5f},"
+        f"{_command_power_mw(limits.pv.min_pem_charging_power_w):.1f},"
+        f"{_command_voltage_threshold(limits.pv.min_load_supply_voltage_v):.5f},"
+        f"{_command_power_mw(limits.pv.min_load_supply_power_w):.1f},"
         f"{safety_margin_mw}"
     )
 
@@ -648,3 +660,21 @@ def _state_min(
         return float(default)
 
     return float(values.min())
+
+
+def _threshold_reached(value: float, threshold: float) -> bool:
+    return np.isfinite(threshold) and value >= threshold
+
+
+def _command_voltage_threshold(threshold: float) -> float:
+    if np.isfinite(threshold):
+        return float(threshold)
+
+    return 999.0
+
+
+def _command_power_mw(power_w: float) -> float:
+    if np.isfinite(power_w):
+        return float(power_w) * 1000.0
+
+    return 999999.0
