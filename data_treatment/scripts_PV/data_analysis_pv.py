@@ -31,6 +31,9 @@ from data_treatment.plots.plot_style import DISTANCE_COLORS, PURPLE, BLUE, polis
 
 DATA_DIR = BACHELOR_DIR / "data" / "PV_test" / "New_test"
 OUTPUT_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_PV"
+PROCESSED_BATTERY_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_Battery"
+PROCESSED_PEM_DIR = BACHELOR_DIR / "app" / "python" / "data" / "processed_PEM"
+LOAD_DEMAND_DIR = BACHELOR_DIR / "app" / "python" / "data" / "variable_load_signal"
 PLOT_DIR = BACHELOR_DIR / "data_treatment" / "plots" / "pv_plots"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -72,6 +75,34 @@ OBSOLETE_OUTPUTS = [
     PLOT_DIR / "pv_operating_states.png",
     PLOT_DIR / "pv_voltage_vs_distance.png",
 ]
+
+TASKS = {
+    "battery_charging": {
+        "label": "Battery charging",
+        "power_column": "min_pv_power_for_battery_charging_mW",
+        "voltage_column": "min_pv_voltage_for_battery_charging_V",
+        "summary_column": "min_voltage_for_battery_charging_V",
+        "color": "#2E8B57",
+    },
+    "pem_charging": {
+        "label": "PEM charging",
+        "power_column": "min_pv_power_for_pem_charging_mW",
+        "voltage_column": "min_pv_voltage_for_pem_charging_V",
+        "summary_column": "min_voltage_for_pem_charging_V",
+        "color": "#7B4FA3",
+    },
+    "load_supply": {
+        "label": "Load supply",
+        "power_column": "min_pv_power_for_load_supply_mW",
+        "voltage_column": "min_pv_voltage_for_load_supply_V",
+        "summary_column": "min_voltage_for_load_supply_V",
+        "color": "#C27C2C",
+    },
+}
+
+
+def warn(message):
+    print(f"WARNING: {message}")
 
 
 def extract_distance_from_filename(file_path):
@@ -119,37 +150,188 @@ def apply_inspected_test_window(df, distance_cm):
     return df[(df["time_s"] >= start_s) & (df["time_s"] <= end_s)].copy()
 
 
+def finite_float(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+    return value if np.isfinite(value) else np.nan
+
+
+def load_single_row_csv(path, source_name):
+    if not path.exists():
+        warn(f"{source_name} not found: {path}")
+        return None
+
+    df = pd.read_csv(path)
+    if len(df) == 0:
+        warn(f"{source_name} is empty: {path}")
+        return None
+
+    return df.iloc[0]
+
+
+def load_positive_column_value(path, column, source_name, *, aggregation="max"):
+    if not path.exists():
+        warn(f"{source_name} not found: {path}")
+        return np.nan
+
+    df = pd.read_csv(path)
+    if column not in df.columns:
+        warn(f"{source_name} has no '{column}' column")
+        return np.nan
+
+    values = pd.to_numeric(df[column], errors="coerce")
+    values = values[np.isfinite(values) & (values > 0)]
+    if len(values) == 0:
+        warn(f"{source_name} contains no positive values in '{column}'")
+        return np.nan
+
+    if aggregation == "median":
+        return float(values.median())
+
+    return float(values.max())
+
+
+def load_battery_charging_power_mW():
+    """
+    Use the measured battery charge power as the PV-to-battery task requirement.
+    The maximum observed charge power is conservative for EMS switching.
+    """
+    row = load_single_row_csv(
+        PROCESSED_BATTERY_DIR / "battery_charge_summary.csv",
+        "processed battery charge summary",
+    )
+    if row is None or "max_power_W" not in row.index:
+        warn("Battery charging power threshold could not be derived from processed battery data")
+        return np.nan
+
+    power_w = finite_float(row["max_power_W"])
+    if pd.isna(power_w) or power_w <= 0:
+        warn("Battery charging power threshold is missing or non-positive in processed battery data")
+        return np.nan
+
+    return power_w * 1000
+
+
+def load_pem_charging_power_mW():
+    """
+    Use measured electrolysis input power as the PV-to-PEM task requirement.
+    The largest stable charge-test average is used as a defensible conservative
+    requirement instead of inventing a nominal value.
+    """
+    charge_power_mw = load_positive_column_value(
+        PROCESSED_PEM_DIR / "pem_analysis_charge_discharge_summary.csv",
+        "avg_charge_power_W",
+        "processed PEM charge/discharge analysis",
+        aggregation="max",
+    )
+    if not pd.isna(charge_power_mw):
+        return charge_power_mw * 1000
+
+    row = load_single_row_csv(
+        PROCESSED_PEM_DIR / "pem_analysis_polarization_charge_summary.csv",
+        "processed PEM polarization charge analysis",
+    )
+    if row is None or "input_energy_J" not in row.index or "charge_duration_s" not in row.index:
+        warn("PEM charging power threshold could not be derived from processed PEM data")
+        return np.nan
+
+    input_energy_j = finite_float(row["input_energy_J"])
+    charge_duration_s = finite_float(row["charge_duration_s"])
+    if (
+        pd.isna(input_energy_j)
+        or pd.isna(charge_duration_s)
+        or input_energy_j <= 0
+        or charge_duration_s <= 0
+    ):
+        warn("PEM charging power threshold is missing or non-positive in processed PEM data")
+        return np.nan
+
+    return 1000 * input_energy_j / charge_duration_s
+
+
+def load_load_supply_power_mW():
+    """
+    Use the processed demand profile as the PV-to-load supply requirement.
+    Maximum demand is the conservative value for direct load supply.
+    """
+    return load_positive_column_value(
+        LOAD_DEMAND_DIR / "scaled_may_power_profile_15min.csv",
+        "power_mW",
+        "processed scaled load demand profile",
+        aggregation="max",
+    )
+
+
+def load_task_power_requirements():
+    # Task thresholds come from component or demand data. If a threshold cannot
+    # be justified from processed data, it stays NaN so the exported EMS file
+    # does not silently contain an invented switching value.
+    requirements = {
+        "battery_charging": load_battery_charging_power_mW(),
+        "pem_charging": load_pem_charging_power_mW(),
+        "load_supply": load_load_supply_power_mW(),
+    }
+
+    for task, power_mw in requirements.items():
+        if pd.isna(power_mw):
+            warn(f"{TASKS[task]['label']} PV power requirement is NaN")
+        else:
+            print(f"{TASKS[task]['label']} power requirement: {power_mw:.2f} mW")
+
+    return requirements
+
+
 def voltage_at_power_threshold(df, threshold_mW):
-    """Return the lowest voltage where corrected PV power reaches a threshold."""
-    candidates = df[df["pv_power_mW"] >= threshold_mW]
+    """
+    Return the ramp voltage where corrected PV power first reaches a task load.
+
+    PV power is P = V * I using the corrected INA226 PV voltage and current.
+    Open-circuit voltage by itself cannot prove usable power, so EMS thresholds
+    are derived from the measured power-voltage ramp instead.
+    """
+    if pd.isna(threshold_mW) or threshold_mW <= 0:
+        return np.nan
+
+    ramp = df.sort_values("time_s")
+    candidates = ramp[ramp["pv_power_mW"] >= threshold_mW]
     if candidates.empty:
         return np.nan
-    return candidates["pv_voltage_V"].min()
+    return float(candidates.iloc[0]["pv_voltage_V"])
 
 
-def extract_threshold_metrics(df):
+def extract_threshold_metrics(df, task_power_requirements):
     """Extract only the corrected PV values needed for EMS threshold selection."""
     if len(df) < 2:
         return None
 
-    # MPP values characterize PV capability at each lamp distance.
+    # MPP values characterize the PV panel at each lamp distance. They are not
+    # used directly as EMS switching thresholds because EMS tasks depend on the
+    # power required by the battery, PEM electrolyser, or load.
     mpp_idx = df["pv_power_mW"].idxmax()
     mpp_row = df.loc[mpp_idx]
 
-    # Voltage at fixed power thresholds is used for EMS control design.
-    return {
+    # Voltage thresholds are found where corrected PV power first exceeds each
+    # component task requirement in the ramp data.
+    metrics = {
+        "mpp_time_s": mpp_row["time_s"],
         "mpp_voltage_V": mpp_row["pv_voltage_V"],
         "mpp_current_A": mpp_row["pv_current_A"],
         "mpp_power_mW": mpp_row["pv_power_mW"],
-        "min_voltage_for_20mW": voltage_at_power_threshold(df, 20),
-        "min_voltage_for_50mW": voltage_at_power_threshold(df, 50),
         "max_voltage_V": df["pv_voltage_V"].max(),
         "max_current_A": df["pv_current_A"].max(),
         "max_power_mW": df["pv_power_mW"].max(),
     }
 
+    for task, threshold_mw in task_power_requirements.items():
+        metrics[TASKS[task]["summary_column"]] = voltage_at_power_threshold(df, threshold_mw)
 
-def analyze_all_tests():
+    return metrics
+
+
+def analyze_all_tests(task_power_requirements):
     """Main analysis function: process all distance files"""
     results = []
     
@@ -162,7 +344,7 @@ def analyze_all_tests():
         
         try:
             df = apply_inspected_test_window(read_pv_log(file_path), distance_cm)
-            metrics = extract_threshold_metrics(df)
+            metrics = extract_threshold_metrics(df, task_power_requirements)
             
             if metrics:
                 metrics["distance_cm"] = distance_cm
@@ -178,31 +360,55 @@ def analyze_all_tests():
     columns = [
         "distance_cm",
         "file",
+        "mpp_time_s",
         "mpp_voltage_V",
         "mpp_current_A",
         "mpp_power_mW",
-        "min_voltage_for_20mW",
-        "min_voltage_for_50mW",
         "max_voltage_V",
         "max_current_A",
         "max_power_mW",
-    ]
+    ] + [task["summary_column"] for task in TASKS.values()]
     return pd.DataFrame(results).reindex(columns=columns)
 
 
-def create_operating_thresholds(summary_df):
+def conservative_voltage_threshold(summary_df, column):
+    values = pd.to_numeric(summary_df[column], errors="coerce").dropna()
+    if len(values) == 0:
+        warn(f"No PV ramp reached '{column}', EMS voltage threshold is NaN")
+        return np.nan
+
+    median_value = float(values.median())
+    conservative_value = float(values.max())
+    print(
+        f"{column}: median={median_value:.3f} V, "
+        f"conservative EMS value={conservative_value:.3f} V"
+    )
+    return conservative_value
+
+
+def create_operating_thresholds(summary_df, task_power_requirements):
     """
     Create final EMS control parameters from corrected, windowed PV data.
+
+    Per-distance threshold voltages are aggregated conservatively with the
+    maximum reached threshold voltage. This avoids an overly optimistic EMS
+    threshold based on only the easiest lamp distance.
     """
-    thresholds = {
-        "min_pv_voltage_for_charging_V": [summary_df["min_voltage_for_20mW"].min()],
-        "min_pv_voltage_for_load_V": [summary_df["min_voltage_for_50mW"].min()],
-        "max_pv_voltage_V": [summary_df["max_voltage_V"].max()],
-        "max_available_current_A": [summary_df["max_current_A"].max()],
-        "max_available_power_mW": [summary_df["max_power_mW"].max()],
-        "min_usable_power_for_charging_mW": [20],
-        "min_usable_power_for_load_mW": [50],
-    }
+    thresholds = {}
+    for task, config in TASKS.items():
+        thresholds[config["voltage_column"]] = [
+            conservative_voltage_threshold(summary_df, config["summary_column"])
+        ]
+        thresholds[config["power_column"]] = [task_power_requirements[task]]
+
+    # Maximum PV values are measured during the lamp ramp tests. They document
+    # the observed test range, not guaranteed available current or power under
+    # every EMS operating condition.
+    thresholds.update({
+        "max_measured_pv_voltage_V": [summary_df["max_voltage_V"].max()],
+        "max_measured_pv_current_A": [summary_df["max_current_A"].max()],
+        "max_measured_pv_power_mW": [summary_df["max_power_mW"].max()],
+    })
     
     return pd.DataFrame(thresholds)
 
@@ -243,6 +449,63 @@ def generate_mpp_plots(summary_df):
     ax.legend(loc="best")
     polish_axes(ax)
     save_report_figure(fig, PLOT_DIR / "pv_current_vs_distance.png")
+
+
+def generate_power_voltage_threshold_plot(summary_df, task_power_requirements):
+    """Show how task power requirements are translated to PV voltage limits."""
+    set_report_style()
+    distance_files = sorted(DATA_DIR.glob("PV_*cm_ramp.csv"))
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.8))
+
+    for file_path in distance_files:
+        distance_cm = extract_distance_from_filename(file_path)
+        df = apply_inspected_test_window(read_pv_log(file_path), distance_cm)
+        color = DISTANCE_COLORS.get(distance_cm, BLUE)
+        label = f"{distance_cm} cm"
+        ax.plot(df["pv_voltage_V"], df["pv_power_mW"], color=color, alpha=0.85, label=label)
+
+        match = summary_df[summary_df["distance_cm"] == distance_cm]
+        if len(match) == 0:
+            continue
+        row = match.iloc[0]
+
+        for task, config in TASKS.items():
+            threshold_voltage = row[config["summary_column"]]
+            threshold_power = task_power_requirements[task]
+            if pd.isna(threshold_voltage) or pd.isna(threshold_power):
+                continue
+            ax.scatter(
+                threshold_voltage,
+                threshold_power,
+                s=44,
+                color=config["color"],
+                edgecolors="white",
+                linewidth=0.8,
+                zorder=5,
+            )
+
+    for task, config in TASKS.items():
+        threshold_power = task_power_requirements[task]
+        if pd.isna(threshold_power):
+            continue
+        ax.axhline(
+            threshold_power,
+            color=config["color"],
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.9,
+            label=f"{config['label']}: {threshold_power:.1f} mW",
+        )
+
+    ax.set_xlabel("Corrected PV voltage [V]")
+    ax.set_ylabel("Corrected PV power [mW]")
+    ax.set_title("PV Task Power Thresholds from Ramp Tests")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    polish_axes(ax)
+    fig.tight_layout(rect=(0, 0, 0.78, 1))
+    fig.savefig(PLOT_DIR / "pv_power_voltage_task_thresholds.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 
 def generate_corrected_series_plot(windowed, filename, title):
@@ -299,9 +562,11 @@ def main():
     remove_obsolete_outputs()
     print("PV Panel Analysis")
     print("=" * 60)
+
+    task_power_requirements = load_task_power_requirements()
     
     # Analyze all test files
-    summary_df = analyze_all_tests()
+    summary_df = analyze_all_tests(task_power_requirements)
     
     if len(summary_df) == 0:
         print("ERROR: No test files processed successfully!")
@@ -310,7 +575,7 @@ def main():
     print(f"\nProcessed {len(summary_df)} test files")
     
     # Create operating thresholds
-    thresholds = create_operating_thresholds(summary_df)
+    thresholds = create_operating_thresholds(summary_df, task_power_requirements)
     print("Created operating thresholds")
     
     # Save outputs
@@ -331,6 +596,7 @@ def main():
         title="Corrected PV Test Series After Windowing",
     )
     generate_mpp_plots(summary_df)
+    generate_power_voltage_threshold_plot(summary_df, task_power_requirements)
     
     # Print summary
     print("\n" + "=" * 60)

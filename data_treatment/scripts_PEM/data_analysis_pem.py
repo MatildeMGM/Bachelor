@@ -59,7 +59,9 @@ COLLAPSE_STARTUP_IGNORE_S = 20.0
 COLLAPSE_DVDT_SIGMA = 6.0
 COLLAPSE_MIN_DVDT_MAGNITUDE_V_PER_S = 0.002
 FUEL_CELL_WAIT_CURRENT_A = 0.01
+FUEL_CELL_ZOOM_START_AFTER_STABLE_S = 3.0
 ELECTROLYSIS_STABLE_CURRENT_FRACTION = 0.90
+ELECTROLYSIS_STARTUP_IGNORE_S = 5.0
 STABLE_POINTS = 3
 
 FARADAY_CONSTANT_C_PER_MOL = 96485.33212
@@ -75,7 +77,9 @@ OBSOLETE_OUTPUTS = [
     OUTPUT_DIR / "pem_polarization_charge_summary.csv",
     PLOT_DIR / "pem_output_energy_vs_hydrogen_volume.png",
     PLOT_DIR / "pem_output_energy_vs_charge_time.png",
+    PLOT_DIR / "pem_hydrogen_volume_vs_charge_time.png",
     PLOT_DIR / "pem_full_cycle.png",
+    PLOT_DIR / "pem_charge_discharge_subplot.png",
     PLOT_DIR / "pem_polarization_cutoff_mpp.png",
 ]
 
@@ -383,6 +387,35 @@ def time_until_stable_electrolysis(charge, expected_current_a=None, points=STABL
     return float(charge["local_time_s"].iloc[indices[0]])
 
 
+def stable_electrolysis_region(charge, expected_current_a=None):
+    """
+    Return the stable part of a corrected PEM charge segment after startup.
+
+    The startup transient is excluded because it contains relay switching,
+    sensor settling and PEM activation behavior. The EMS threshold should
+    represent sustained electrolysis, not the startup behavior.
+
+    The resulting averages are empirical EMS limits from the tested setup:
+    minimum_electrolysis_power_W means the lowest measured stable charge power
+    that still produced useful hydrogen, not a theoretical electrolysis limit.
+    """
+    if len(charge) < STABLE_POINTS:
+        return pd.DataFrame(), np.nan
+
+    stable_start_s = time_until_stable_electrolysis(charge, expected_current_a)
+    if pd.isna(stable_start_s):
+        return pd.DataFrame(), np.nan
+
+    stable_start_s = max(stable_start_s, ELECTROLYSIS_STARTUP_IGNORE_S)
+    stable = charge[charge["local_time_s"] >= stable_start_s].copy()
+    stable = stable[stable["pem_current_A"] > 0].copy()
+
+    if len(stable) < STABLE_POINTS:
+        return pd.DataFrame(), np.nan
+
+    return stable, stable_start_s
+
+
 def minimum_wait_after_switching_to_electrolysis(charge_summary):
     waits = charge_summary["wait_after_switching_to_electrolysis_s"].dropna()
     if len(waits) == 0:
@@ -555,6 +588,107 @@ def minimum_usable_voltage_from_collapse(collapse_points):
     return float(collapse_points["collapse_voltage_V"].median())
 
 
+def summarize_minimum_electrolysis_requirement(charge_summary):
+    """
+    Find the lowest stable average PEM charging power that produced hydrogen.
+
+    The EMS uses this empirical value to decide whether PV -> PEM charging is
+    physically meaningful in the tested system. Hydrogen volume is measured in
+    these lab tests; during EMS operation it is estimated from charge input
+    using Faraday's law and the measured coulomb efficiency.
+
+    A selected test must show useful hydrogen storage, not only stable current.
+    This prevents selecting a short charge test, such as 200 mA for 30 s, if it
+    does not produce useful discharge or enough stored hydrogen.
+    """
+    rows = []
+    successful = charge_summary[
+        (charge_summary["hydrogen_volume_mL"] > 0)
+        & (charge_summary["input_charge_C"] > 0)
+        & (
+            (charge_summary["output_energy_J"] > 0)
+            | (charge_summary["usable_discharge_duration_s"] > 0)
+        )
+    ].copy()
+
+    if len(successful) == 0:
+        warn("minimum_electrolysis_power_W could not be derived because no hydrogen-producing charge tests with useful discharge were found")
+        return pd.DataFrame(), {
+            "minimum_electrolysis_voltage_V": np.nan,
+            "minimum_electrolysis_current_A": np.nan,
+            "minimum_electrolysis_power_W": np.nan,
+            "minimum_electrolysis_selected_file": np.nan,
+            "minimum_electrolysis_selected_current_A": np.nan,
+            "minimum_electrolysis_selected_duration_s": np.nan,
+            "minimum_electrolysis_startup_ignore_s": ELECTROLYSIS_STARTUP_IGNORE_S,
+        }
+
+    for file_path in sorted(CHARGE_DISCHARGE_DIR.glob("*.csv")):
+        current_a, duration_s, repeat = extract_test_info(file_path)
+        if pd.isna(current_a) or pd.isna(duration_s):
+            continue
+
+        match = successful[successful["file"] == file_path.name]
+        if len(match) == 0:
+            continue
+
+        df = read_log(file_path)
+        charge, _ = split_charge_discharge(df, duration_s, current_a)
+        stable, stable_start_s = stable_electrolysis_region(charge, current_a)
+        if len(stable) == 0:
+            warn(f"No stable electrolysis region found in successful charge test {file_path.name}")
+            continue
+
+        stable_power = np.maximum(stable["pem_power_W"], 0)
+        rows.append({
+            "file": file_path.name,
+            "charge_current_setpoint_A": current_a,
+            "charge_duration_setpoint_s": duration_s,
+            "repeat": repeat,
+            "hydrogen_volume_mL": float(match.iloc[0]["hydrogen_volume_mL"]),
+            "input_charge_C": float(match.iloc[0]["input_charge_C"]),
+            "output_energy_J": float(match.iloc[0]["output_energy_J"]),
+            "usable_discharge_duration_s": float(match.iloc[0]["usable_discharge_duration_s"]),
+            "startup_ignore_s": ELECTROLYSIS_STARTUP_IGNORE_S,
+            "stable_start_s": stable_start_s,
+            "stable_end_s": float(stable["local_time_s"].iloc[-1]),
+            "stable_sample_count": int(len(stable)),
+            "stable_avg_voltage_V": float(stable["pem_voltage_V"].mean()),
+            "stable_avg_current_A": float(stable["pem_current_A"].mean()),
+            "stable_avg_power_W": float(stable_power.mean()),
+        })
+
+    analysis = pd.DataFrame(rows)
+    if len(analysis) == 0:
+        warn("minimum_electrolysis_power_W could not be derived from stable successful charge regions")
+        return analysis, {
+            "minimum_electrolysis_voltage_V": np.nan,
+            "minimum_electrolysis_current_A": np.nan,
+            "minimum_electrolysis_power_W": np.nan,
+            "minimum_electrolysis_selected_file": np.nan,
+            "minimum_electrolysis_selected_current_A": np.nan,
+            "minimum_electrolysis_selected_duration_s": np.nan,
+            "minimum_electrolysis_startup_ignore_s": ELECTROLYSIS_STARTUP_IGNORE_S,
+        }
+
+    selected = analysis.loc[analysis["stable_avg_power_W"].idxmin()]
+    minimum_values = {
+        "minimum_electrolysis_voltage_V": float(selected["stable_avg_voltage_V"]),
+        "minimum_electrolysis_current_A": float(selected["stable_avg_current_A"]),
+        "minimum_electrolysis_power_W": float(selected["stable_avg_power_W"]),
+        "minimum_electrolysis_selected_file": selected["file"],
+        "minimum_electrolysis_selected_current_A": float(selected["charge_current_setpoint_A"]),
+        "minimum_electrolysis_selected_duration_s": float(selected["charge_duration_setpoint_s"]),
+        "minimum_electrolysis_startup_ignore_s": ELECTROLYSIS_STARTUP_IGNORE_S,
+    }
+
+    print(
+        "Minimum electrolysis power from "
+        f"{selected['file']}: {minimum_values['minimum_electrolysis_power_W']:.3f} W"
+    )
+    return analysis, minimum_values
+
+
 def get_polarization_limit(polarization_summary):
     if len(polarization_summary) == 0:
         return np.nan, np.nan
@@ -577,6 +711,7 @@ def make_control_parameters(
     full_cycle_summary,
     polarization_summary,
     polarization_charge_summary,
+    minimum_electrolysis_values,
 ):
     usable = summary[(summary["usable_discharge_duration_s"] > 0) & (summary["output_energy_J"] > 0)]
     with_paired_h2 = usable.dropna(subset=["hydrogen_volume_mL"])
@@ -625,6 +760,13 @@ def make_control_parameters(
     return pd.DataFrame([
         {
             "minimum_usable_fuel_cell_voltage_V": minimum_usable_voltage_v,
+            "minimum_electrolysis_voltage_V": minimum_electrolysis_values["minimum_electrolysis_voltage_V"],
+            "minimum_electrolysis_current_A": minimum_electrolysis_values["minimum_electrolysis_current_A"],
+            "minimum_electrolysis_power_W": minimum_electrolysis_values["minimum_electrolysis_power_W"],
+            "minimum_electrolysis_selected_file": minimum_electrolysis_values["minimum_electrolysis_selected_file"],
+            "minimum_electrolysis_selected_current_A": minimum_electrolysis_values["minimum_electrolysis_selected_current_A"],
+            "minimum_electrolysis_selected_duration_s": minimum_electrolysis_values["minimum_electrolysis_selected_duration_s"],
+            "minimum_electrolysis_startup_ignore_s": minimum_electrolysis_values["minimum_electrolysis_startup_ignore_s"],
             "maximum_usable_discharge_current_A": max_discharge_current_a,
             "maximum_usable_discharge_power_W": max_discharge_power_w,
             "maximum_electrolysis_current_A": max_electrolysis_current_a,
@@ -668,10 +810,112 @@ def collect_curves():
     return sorted(curves, key=lambda item: (item[0], item[1]))
 
 
-def plot_charge_discharge(minimum_usable_voltage_v):
+def selected_minimum_electrolysis_row(minimum_electrolysis_analysis):
+    if len(minimum_electrolysis_analysis) == 0:
+        return None
+
+    return minimum_electrolysis_analysis.loc[minimum_electrolysis_analysis["stable_avg_power_W"].idxmin()]
+
+
+def plot_minimum_electrolysis_power(minimum_electrolysis_analysis, minimum_electrolysis_values):
     set_report_style()
-    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8))
-    charge_ax, discharge_ax = axes
+    fig, ax = plt.subplots(figsize=(10.5, 5.2))
+    selected = selected_minimum_electrolysis_row(minimum_electrolysis_analysis)
+
+    for current_a, duration_s, charge, _ in collect_curves():
+        color = test_color(current_a)
+        label = f"{int(current_a * 1000)} mA, {duration_s:.0f} s"
+
+        is_selected = (
+            selected is not None
+            and np.isclose(current_a, selected["charge_current_setpoint_A"])
+            and np.isclose(duration_s, selected["charge_duration_setpoint_s"])
+        )
+
+        ax.plot(
+            charge["local_time_s"],
+            np.maximum(charge["pem_power_W"], 0),
+            color=color,
+            alpha=1.0 if is_selected else 0.28,
+            linewidth=3.2 if is_selected else 1.4,
+            label=label,
+        )
+
+    min_power_w = minimum_electrolysis_values["minimum_electrolysis_power_W"]
+
+    if not pd.isna(min_power_w):
+        ax.axhline(
+            min_power_w,
+            color="#4A4A4A",
+            linestyle="--",
+            linewidth=1.7,
+            label=f"Minimum stable charging power: {min_power_w:.3f} W",
+        )
+
+    if selected is not None:
+        ax.axvline(
+            selected["stable_start_s"],
+            color=GREEN,
+            linestyle=":",
+            linewidth=1.8,
+            alpha=0.9,
+        )
+
+        ax.axvline(
+            selected["stable_end_s"],
+            color=GREEN,
+            linestyle=":",
+            linewidth=1.8,
+            alpha=0.9,
+        )
+
+        ax.fill_between(
+            [selected["stable_start_s"], selected["stable_end_s"]],
+            selected["stable_avg_power_W"] - 0.012,
+            selected["stable_avg_power_W"] + 0.012,
+            color=GREEN,
+            alpha=0.18,
+            label=(
+                "Averaging region: "
+                f"{int(selected['charge_current_setpoint_A'] * 1000)} mA, "
+                f"{selected['charge_duration_setpoint_s']:.0f} s"
+            ),
+        )
+
+        ax.annotate(
+            "Lowest stable charging condition",
+            xy=(selected["stable_start_s"] + 8, selected["stable_avg_power_W"]),
+            xytext=(selected["stable_start_s"] + 18, selected["stable_avg_power_W"] + 0.055),
+            arrowprops={
+                "arrowstyle": "->",
+                "color": "#4A4A4A",
+                "linewidth": 1.2,
+            },
+            fontsize=12,
+        )
+
+    ax.set_xlabel("Charge time [s]")
+    ax.set_ylabel("Corrected PEM charging power [W]")
+    ax.set_title("Empirical Minimum Stable PEM Charging Power")
+
+    ax.set_ylim(0.22, 0.69)
+
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        ncol=3,
+        frameon=False,
+    )
+
+    polish_axes(ax)
+    fig.subplots_adjust(left=0.09, right=0.98, top=0.88, bottom=0.33)
+    fig.savefig(PLOT_DIR / "pem_minimum_electrolysis_power.png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+def plot_charge_hydrogen_discharge_overview(charge_summary, minimum_usable_voltage_v, minimum_electrolysis_values):
+    set_report_style()
+    fig, axes = plt.subplots(2, 2, figsize=(13.2, 9.2))
+    charge_ax, h2_ax, discharge_ax, zoom_ax = axes.ravel()
     legend_handles = []
 
     for current_a, duration_s, charge, discharge in collect_curves():
@@ -681,7 +925,7 @@ def plot_charge_discharge(minimum_usable_voltage_v):
 
         line = charge_ax.plot(
             charge["local_time_s"],
-            np.maximum(charge["pem_power_W"], 0) * 1000,
+            np.maximum(charge["pem_power_W"], 0),
             color=color,
             alpha=alpha,
             label=label,
@@ -694,6 +938,46 @@ def plot_charge_discharge(minimum_usable_voltage_v):
             color=color,
             alpha=alpha,
         )
+        fuel_cell_start_s = first_sustained_time(discharge, FUEL_CELL_WAIT_CURRENT_A, STABLE_POINTS)
+        if pd.isna(fuel_cell_start_s):
+            fuel_cell_start_s = 0.0
+
+        # The zoomed subplot is for sustained fuel-cell operation. Starting a
+        # few seconds after stabilization removes the startup switching edge,
+        # while the voltage cutoff keeps only the usable operating region.
+        zoom_start_s = fuel_cell_start_s + FUEL_CELL_ZOOM_START_AFTER_STABLE_S
+        zoom = discharge[discharge["local_time_s"] >= zoom_start_s].copy()
+        if not pd.isna(minimum_usable_voltage_v):
+            zoom = zoom[zoom["pem_voltage_V"] >= minimum_usable_voltage_v].copy()
+
+        if len(zoom) > 0:
+            zoom_ax.plot(
+                zoom["local_time_s"],
+                zoom["pem_voltage_V"],
+                color=color,
+                alpha=alpha,
+            )
+
+    min_power_w = minimum_electrolysis_values["minimum_electrolysis_power_W"]
+    min_power_handle = None
+    if not pd.isna(min_power_w):
+        min_power_handle = charge_ax.axhline(
+            min_power_w,
+            color="#4A4A4A",
+            linestyle="--",
+            linewidth=1.8,
+            label=f"Minimum stable charging power: {min_power_w:.3f} W",
+        )
+
+    for current_a, group in charge_summary.groupby("charge_current_setpoint_A"):
+        group = group.sort_values("charge_duration_setpoint_s")
+        h2_ax.plot(
+            group["charge_duration_setpoint_s"],
+            group["hydrogen_volume_mL"],
+            marker="o",
+            color=test_color(current_a),
+            label=f"{int(current_a * 1000)} mA",
+        )
 
     minimum_voltage_handle = None
     if not pd.isna(minimum_usable_voltage_v):
@@ -704,27 +988,50 @@ def plot_charge_discharge(minimum_usable_voltage_v):
             linewidth=1.8,
             label=f"Minimum usable: {minimum_usable_voltage_v:.3f} V",
         )
+        zoom_ax.axhline(
+            minimum_usable_voltage_v,
+            color="#4A4A4A",
+            linestyle="--",
+            linewidth=1.8,
+        )
 
     charge_ax.set_xlabel("Time [s]")
-    charge_ax.set_ylabel("Input power [mW]")
+    charge_ax.set_ylabel("Input power [W]")
     charge_ax.set_title("PEM Charging Power")
     polish_axes(charge_ax)
+
+    h2_ax.set_xlabel("Charge duration [s]")
+    h2_ax.set_ylabel("Hydrogen volume [mL]")
+    h2_ax.set_title("Hydrogen Produced During Charging")
+    h2_ax.legend(loc="best")
+    polish_axes(h2_ax)
 
     discharge_ax.set_xlabel("Time [s]")
     discharge_ax.set_ylabel("Voltage [V]")
     discharge_ax.set_title("PEM Discharge Voltage")
     polish_axes(discharge_ax)
 
+    zoom_ax.set_xlabel("Time [s]")
+    zoom_ax.set_ylabel("Voltage [V]")
+    zoom_ax.set_title("Usable Fuel Cell Operating Region")
+    zoom_ax.set_ylim(0.54, 0.66)
+    polish_axes(zoom_ax)
+
     blank = Line2D([], [], linestyle="none", label="")
+    combined_handles = legend_handles
+    if min_power_handle:
+        combined_handles.append(min_power_handle)
+    if minimum_voltage_handle:
+        combined_handles.append(minimum_voltage_handle)
     fig.legend(
-        handles=legend_handles + ([minimum_voltage_handle] if minimum_voltage_handle else []) + [blank, blank],
+        handles=combined_handles + [blank],
         loc="upper center",
         bbox_to_anchor=(0.5, 0.03),
         ncol=4,
         frameon=False,
     )
-    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.30, wspace=0.28)
-    fig.savefig(PLOT_DIR / "pem_charge_discharge_subplot.png", bbox_inches="tight", facecolor="white")
+    fig.subplots_adjust(left=0.08, right=0.98, bottom=0.18, top=0.94, wspace=0.25, hspace=0.35)
+    fig.savefig(PLOT_DIR / "pem_charge_hydrogen_discharge_overview.png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
 
@@ -1104,6 +1411,7 @@ def save_outputs(
     polarization_summary,
     collapse_points,
     polarization_charge_summary,
+    minimum_electrolysis_analysis,
 ):
     control_parameters.to_csv(OUTPUT_DIR / "pem_control_parameters.csv", index=False)
 
@@ -1113,22 +1421,30 @@ def save_outputs(
     full_cycle_summary.to_csv(OUTPUT_DIR / "pem_analysis_full_cycle_summary.csv", index=False)
     collapse_points.to_csv(OUTPUT_DIR / "pem_analysis_collapse_points.csv", index=False)
     polarization_charge_summary.to_csv(OUTPUT_DIR / "pem_analysis_polarization_charge_summary.csv", index=False)
+    minimum_electrolysis_analysis.to_csv(OUTPUT_DIR / "pem_analysis_minimum_electrolysis_summary.csv", index=False)
 
     if len(polarization_summary) > 0:
         polarization_summary.to_csv(OUTPUT_DIR / "pem_analysis_polarization_summary.csv", index=False)
 
 
-def make_plots(charge_summary, minimum_usable_voltage_v, polarization_summary, collapse_points):
-    plot_charge_discharge(minimum_usable_voltage_v)
-    plot_discharge_collapse_diagnostics(collapse_points, minimum_usable_voltage_v)
-    plot_summary_lines(
+def make_plots(
+    charge_summary,
+    minimum_usable_voltage_v,
+    polarization_summary,
+    collapse_points,
+    minimum_electrolysis_analysis,
+    minimum_electrolysis_values,
+):
+    plot_charge_hydrogen_discharge_overview(
         charge_summary,
-        "charge_duration_setpoint_s",
-        "hydrogen_volume_mL",
-        "Hydrogen volume [mL]",
-        "Hydrogen Production During PEM Charging",
-        "pem_hydrogen_volume_vs_charge_time.png",
+        minimum_usable_voltage_v,
+        minimum_electrolysis_values,
     )
+    plot_minimum_electrolysis_power(
+        minimum_electrolysis_analysis,
+        minimum_electrolysis_values,
+    )
+    plot_discharge_collapse_diagnostics(collapse_points, minimum_usable_voltage_v)
     plot_polarization_curve(minimum_usable_voltage_v, polarization_summary)
     plot_polarization_power_curve(minimum_usable_voltage_v, polarization_summary)
 
@@ -1145,6 +1461,9 @@ def main():
     polarization_charge_summary = summarize_polarization_charge()
 
     charge_summary = summarize_charge_discharge_tests(volume_data, minimum_usable_voltage_v)
+    minimum_electrolysis_analysis, minimum_electrolysis_values = (
+        summarize_minimum_electrolysis_requirement(charge_summary)
+    )
     full_cycle_summary, _, _ = summarize_full_cycle(minimum_usable_voltage_v)
     control_parameters = make_control_parameters(
         charge_summary,
@@ -1152,6 +1471,7 @@ def main():
         full_cycle_summary,
         polarization_summary,
         polarization_charge_summary,
+        minimum_electrolysis_values,
     )
 
     save_outputs(
@@ -1161,8 +1481,16 @@ def main():
         polarization_summary,
         collapse_points,
         polarization_charge_summary,
+        minimum_electrolysis_analysis,
     )
-    make_plots(charge_summary, minimum_usable_voltage_v, polarization_summary, collapse_points)
+    make_plots(
+        charge_summary,
+        minimum_usable_voltage_v,
+        polarization_summary,
+        collapse_points,
+        minimum_electrolysis_analysis,
+        minimum_electrolysis_values,
+    )
 
     print("\nPEM control parameters:")
     print(control_parameters)
@@ -1174,6 +1502,8 @@ def main():
     print(polarization_summary)
     print("\nPEM analysis polarization charge summary:")
     print(polarization_charge_summary)
+    print("\nPEM analysis minimum electrolysis summary:")
+    print(minimum_electrolysis_analysis)
     print("\nSaved output files in:")
     print(OUTPUT_DIR)
     print("\nSaved plots in:")
