@@ -1,2 +1,0 @@
-file,measured_duration_s,start_voltage_V,end_voltage_V,min_voltage_V,max_voltage_V,avg_discharge_current_A,max_discharge_current_A,avg_discharge_power_W,max_discharge_power_W,usable_energy_Wh,usable_capacity_Ah
-BATTERY_DISCHARGE_ina226_soc_log_20260421_095715.csv,47338.829,4.3666,2.9728,2.9728,4.3666,0.16169213319646109,0.178875,0.638909312465394,0.7808788125,8.40147793951368,2.1262033055

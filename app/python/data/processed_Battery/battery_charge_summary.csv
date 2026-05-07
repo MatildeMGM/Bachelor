@@ -1,2 +1,0 @@
-file,measured_duration_s,start_voltage_V,end_voltage_V,min_voltage_V,max_voltage_V,avg_current_A,max_current_A,avg_power_W,max_power_W,input_energy_Wh,charged_capacity_Ah
-BATTERY_CHARGE_ina226_soc_log_20260420_180900.csv,30907.271,3.1414,4.3524,3.1414,4.3524,0.24940364958179342,0.397675,0.9791145306592428,1.521210075,8.406196156311578,2.1412493548506943
