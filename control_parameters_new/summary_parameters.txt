@@ -1,0 +1,38 @@
+EMS control parameter notebook set
+=================================
+
+Updated notebooks in control_parameters_new:
+- demand/demand_thresholds.ipynb
+- price/price_thresholds.ipynb
+- pv/PV_analysis.ipynb
+- battery/battery_SOC.ipynb
+- pem/voltage_cutoff.ipynb
+- pem/max_discharge.ipynb
+- pem/hydrogen_charge_rate.ipynb
+- pem/hydrogen_discharge_rate.ipynb
+- summary_parameters.ipynb
+
+Main current values:
+- LOW_DEMAND_THRESHOLD_MILLIWATT = 43.31 mW
+- HIGH_DEMAND_THRESHOLD_MILLIWATT = 66.01 mW
+- MAX_DEMAND_MILLIWATT = 100.00 mW
+- LOW_PRICE_THRESHOLD_DKK_PER_KWH = 0.2857 DKK/kWh
+- HIGH_PRICE_THRESHOLD_DKK_PER_KWH = 0.8308 DKK/kWh
+- EMS_BATTERY_CAPACITY_MILLIWATT_HOUR = 100.0 mWh
+- BATTERY_MAX_DISCHARGE_POWER_W = 0.100 W
+- PEM_MIN_USABLE_VOLTAGE = 0.54975 V
+- PEM_MAX_DISCHARGE_POWER_W = 0.03195 W
+- PV_MAX_POWER_W = 0.37979 W
+- PV_MIN_LOAD_SUPPLY_VOLTAGE = 4.2812 V
+- MEASURED_FULL_HYDROGEN_CAPACITY_ML = 15.6 mL
+- H2_LEFT_AT_FULL_TEST_END_ML = 7.6 mL
+- HYDROGEN_PRODUCTION_ML_PER_INPUT_J = 0.07102 mL/J
+- HYDROGEN_CONSUMPTION_ML_PER_OUTPUT_J = 0.47514 mL/J
+
+Critical interpretation:
+- Demand thresholds are state thresholds, not physical min/max limits.
+- Keep demand in mW in the app configuration.
+- The battery is energy-scaled to 100 mWh for the EMS demo.
+- PEM cutoff and full-test hydrogen end reading are not the same endpoint.
+- PEM max usable power is below the absolute polarization-curve peak because voltage must stay above cutoff.
+- PV can supply the 100 mW scaled load in the measured tests, but it does not reach the conservative battery/PEM charging powers.
