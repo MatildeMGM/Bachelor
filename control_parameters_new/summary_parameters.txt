@@ -28,6 +28,10 @@ Main current values:
 - H2_LEFT_AT_FULL_TEST_END_ML = 7.6 mL
 - HYDROGEN_PRODUCTION_ML_PER_INPUT_J = 0.07102 mL/J
 - HYDROGEN_CONSUMPTION_ML_PER_OUTPUT_J = 0.47514 mL/J
+- USEFUL_PEM_OUTPUT_DURATION_S = 60.0 s
+- PEM_USEFUL_OUTPUT_ENERGY_J = 1.917 J
+- PEM_HYDROGEN_FOR_USEFUL_OUTPUT_ML = 0.911 mL
+- PEM_CHARGE_ENERGY_FOR_USEFUL_OUTPUT_J = 12.82 J
 
 Critical interpretation:
 - Demand thresholds are state thresholds, not physical min/max limits.
@@ -35,4 +39,7 @@ Critical interpretation:
 - The battery is energy-scaled to 100 mWh for the EMS demo.
 - PEM cutoff and full-test hydrogen end reading are not the same endpoint.
 - PEM max usable power is below the absolute polarization-curve peak because voltage must stay above cutoff.
-- PV can supply the 100 mW scaled load in the measured tests, but it does not reach the conservative battery/PEM charging powers.
+- PEM charging is treated as an energy accumulation problem, not as a fixed charging-current demand.
+- One useful PEM output event is defined as 60 s at the selected usable PEM discharge power.
+- That useful PEM output event requires about 12.8 J of PEM input charge energy, derived from the measured hydrogen production and consumption rates.
+- PV can supply the 100 mW scaled load and can accumulate the derived useful PEM charge energy in the measured ramp tests.
