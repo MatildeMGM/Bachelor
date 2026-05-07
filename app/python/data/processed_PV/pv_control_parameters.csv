@@ -1,2 +1,0 @@
-min_pv_voltage_for_battery_charging_V,min_pv_power_for_battery_charging_mW,min_pv_voltage_for_pem_charging_V,min_pv_power_for_pem_charging_mW,min_pv_voltage_for_load_supply_V,min_pv_power_for_load_supply_mW,max_measured_pv_voltage_V,max_measured_pv_current_A,max_measured_pv_power_mW
-,1521.210075,,651.8000811151096,4.2812,100.0,4.4112,0.111688,379.788465
