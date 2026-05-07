@@ -17,7 +17,7 @@ from config import (
     DK_TZ,
     VALID_PRICE_ZONES,
 )
-from data.prices import fetch_prices_for_today
+from app.python.data.price_data.prices import fetch_prices_for_today
 from ems_state import known_clients, state, state_lock
 from scheduler import (
     SchedulerConfig,

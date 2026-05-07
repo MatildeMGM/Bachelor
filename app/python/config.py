@@ -19,6 +19,15 @@ DEMO_DAY_SECONDS = 12 * 60
 DEMO_SLOT_SECONDS = DEMO_DAY_SECONDS / 96
 DEMO_ENABLED = True
 
+# Relative state thresholds used by the EMS scheduler.
+# Demand profile values are stored in mW before scheduler loading.
+LOW_DEMAND_THRESHOLD_MW = 43.31
+HIGH_DEMAND_THRESHOLD_MW = 66.01
+
+# Spot prices are classified in DKK/kWh.
+LOW_PRICE_THRESHOLD_DKK_PER_KWH = 0.2857
+HIGH_PRICE_THRESHOLD_DKK_PER_KWH = 0.8308
+
 
 LATITUDE = 55.686
 LONGITUDE = 12.101

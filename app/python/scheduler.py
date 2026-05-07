@@ -13,6 +13,13 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from config import (
+    HIGH_DEMAND_THRESHOLD_MW,
+    HIGH_PRICE_THRESHOLD_DKK_PER_KWH,
+    LOW_DEMAND_THRESHOLD_MW,
+    LOW_PRICE_THRESHOLD_DKK_PER_KWH,
+)
+
 
 APP_PYTHON_DIR = Path(__file__).resolve().parent
 APP_DATA_DIR = APP_PYTHON_DIR / "data"
@@ -364,10 +371,10 @@ def classify_price(
     prices_96: list[float],
     config: SchedulerConfig,
 ) -> str:
-    """Classify the current price compared with the daily price curve."""
+    """Classify the current price using the configured price thresholds."""
 
-    low = float(np.quantile(prices_96, config.price_low_quantile))
-    high = float(np.quantile(prices_96, config.price_high_quantile))
+    low = LOW_PRICE_THRESHOLD_DKK_PER_KWH
+    high = HIGH_PRICE_THRESHOLD_DKK_PER_KWH
 
     if np.isclose(low, high):
         return "medium"
@@ -402,10 +409,10 @@ def classify_inputs(
 
 
 def classify_demand(demand_w: float, demand_96: list[float]) -> str:
-    """Classify demand compared with the daily load profile."""
+    """Classify demand using the configured demand thresholds."""
 
-    low = float(np.quantile(demand_96, 0.35))
-    high = float(np.quantile(demand_96, 0.70))
+    low = LOW_DEMAND_THRESHOLD_MW / 1000.0
+    high = HIGH_DEMAND_THRESHOLD_MW / 1000.0
     return _low_medium_high(demand_w, low, high)
 
 
