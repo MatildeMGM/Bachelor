@@ -37,6 +37,7 @@ int requestedScenario = 1;
 float requestedDemand_mW = 0.0;
 bool scenarioReceived = false;
 bool scenarioAccepted = true;
+bool configReceived = false;
 String lastRejectReason = "";
 
 float PV_MIN_VOLTAGE_FOR_BATTERY_CHARGING = 0.0;
@@ -47,17 +48,17 @@ float PV_MIN_VOLTAGE_FOR_LOAD_SUPPLY = 0.0;
 float PV_MIN_POWER_FOR_LOAD_SUPPLY = 0.0;
 
 // Battery limits from test
-const float BATTERY_MIN_VOLTAGE = 3.0;
-const float BATTERY_MAX_VOLTAGE = 4.2;
-const float BATTERY_EMPTY_TEST_VOLTAGE = 3.0;
-const float BATTERY_FULL_TEST_VOLTAGE = 3.97;
-const float BATTERY_USABLE_ENERGY_WH = 6.33;
+float BATTERY_MIN_VOLTAGE = 3.0;
+float BATTERY_MAX_VOLTAGE = 4.2;
+float BATTERY_EMPTY_TEST_VOLTAGE = 3.0;
+float BATTERY_FULL_TEST_VOLTAGE = 3.97;
+float BATTERY_USABLE_ENERGY_WH = 0.100;
 const float BATTERY_MAX_CHARGE_CURRENT_A = 1.0;
-const float BATTERY_MAX_DISCHARGE_CURRENT_A = 0.16;
-const float BATTERY_LOW_SOC = 10.0;
-const float BATTERY_FULL_SOC = 90.0;
-const float PEM_MIN_USABLE_VOLTAGE = 0.4935;
-const float PEM_MAX_DISCHARGE_POWER_W = 0.040;
+float BATTERY_MAX_DISCHARGE_POWER_W = 0.100;
+float BATTERY_LOW_SOC = 10.0;
+float BATTERY_FULL_SOC = 90.0;
+float PEM_MIN_USABLE_VOLTAGE = 0.54975;
+float PEM_MAX_DISCHARGE_POWER_W = 0.03195;
 float SAFETY_MARGIN_W = 0.005;
 const float PV_VOLTAGE_CORRECTION_V = 0.180;
 const float PV_CURRENT_CORRECTION_A = 0.000138;
@@ -124,6 +125,7 @@ float EstimateBatterySOCFromVoltage(float voltage);
 String GetBatteryChargeState(float soc);
 
 bool apply_price_frame(String payload);
+bool apply_config_frame(String payload);
 bool apply_scenario_frame(String payload);
 String get_status();
 String GetCsvField(String payload, int fieldIndex);
@@ -140,6 +142,7 @@ void setup() {
 
   Bridge.begin();
   Bridge.provide("apply_price_frame", apply_price_frame);
+  Bridge.provide("apply_config_frame", apply_config_frame);
   Bridge.provide("apply_scenario_frame", apply_scenario_frame);
   Bridge.provide("get_status", get_status);
 
@@ -225,6 +228,40 @@ bool apply_price_frame(String payload) {
   Monitor.print(priceSlot);
   Monitor.print(", price: ");
   Monitor.println(electricityprice, 5);
+
+  return true;
+}
+
+bool apply_config_frame(String payload) {
+  // Format:
+  // CONFIG,<bat_min_V>,<bat_full_V>,<bat_empty_test_V>,<bat_full_test_V>,
+  // <bat_capacity_mWh>,<bat_low_soc>,<bat_full_soc>,<bat_max_discharge_mW>,
+  // <pem_min_V>,<pem_max_discharge_mW>,<safety_mW>
+  if (!payload.startsWith("CONFIG,")) {
+    return false;
+  }
+
+  if (GetCsvField(payload, 11).length() == 0) {
+    return false;
+  }
+
+  BATTERY_MIN_VOLTAGE = GetCsvField(payload, 1).toFloat();
+  BATTERY_MAX_VOLTAGE = GetCsvField(payload, 2).toFloat();
+  BATTERY_EMPTY_TEST_VOLTAGE = GetCsvField(payload, 3).toFloat();
+  BATTERY_FULL_TEST_VOLTAGE = GetCsvField(payload, 4).toFloat();
+  BATTERY_USABLE_ENERGY_WH = GetCsvField(payload, 5).toFloat() / 1000.0;
+  BATTERY_LOW_SOC = GetCsvField(payload, 6).toFloat();
+  BATTERY_FULL_SOC = GetCsvField(payload, 7).toFloat();
+  BATTERY_MAX_DISCHARGE_POWER_W = GetCsvField(payload, 8).toFloat() / 1000.0;
+  PEM_MIN_USABLE_VOLTAGE = GetCsvField(payload, 9).toFloat();
+  PEM_MAX_DISCHARGE_POWER_W = GetCsvField(payload, 10).toFloat() / 1000.0;
+  SAFETY_MARGIN_W = GetCsvField(payload, 11).toFloat() / 1000.0;
+  configReceived = true;
+
+  Monitor.print("Received EMS config from Python. Battery capacity Wh: ");
+  Monitor.print(BATTERY_USABLE_ENERGY_WH, 4);
+  Monitor.print(", PEM min V: ");
+  Monitor.println(PEM_MIN_USABLE_VOLTAGE, 5);
 
   return true;
 }
@@ -370,11 +407,21 @@ String get_status() {
   payload += ",batteryChargeState=" + batteryChargeState;
 
   payload += ",mode=" + mode;
+  payload += ",configReceived=" + String(configReceived ? 1 : 0);
   payload += ",priceReceived=" + String(priceReceived ? 1 : 0);
   payload += ",scenarioReceived=" + String(scenarioReceived ? 1 : 0);
   payload += ",scenarioAccepted=" + String(scenarioAccepted ? 1 : 0);
   payload += ",requestedScenario=" + String(requestedScenario);
   payload += ",requestedDemand_mW=" + String(requestedDemand_mW, 1);
+  payload += ",batteryMinVoltage=" + String(BATTERY_MIN_VOLTAGE, 5);
+  payload += ",batteryMaxVoltage=" + String(BATTERY_MAX_VOLTAGE, 5);
+  payload += ",batteryUsableEnergyWh=" + String(BATTERY_USABLE_ENERGY_WH, 5);
+  payload += ",batteryMaxDischargePower=" + String(BATTERY_MAX_DISCHARGE_POWER_W, 5);
+  payload += ",batteryLowSoc=" + String(BATTERY_LOW_SOC, 2);
+  payload += ",batteryFullSoc=" + String(BATTERY_FULL_SOC, 2);
+  payload += ",pemMinUsableVoltage=" + String(PEM_MIN_USABLE_VOLTAGE, 5);
+  payload += ",pemMaxDischargePower=" + String(PEM_MAX_DISCHARGE_POWER_W, 5);
+  payload += ",safetyMarginW=" + String(SAFETY_MARGIN_W, 5);
   payload += ",pvMinVoltageBatteryCharging=" + String(PV_MIN_VOLTAGE_FOR_BATTERY_CHARGING, 5);
   payload += ",pvMinPowerBatteryCharging=" + String(PV_MIN_POWER_FOR_BATTERY_CHARGING, 5);
   payload += ",pvMinVoltagePEMCharging=" + String(PV_MIN_VOLTAGE_FOR_PEM_CHARGING, 5);
@@ -418,7 +465,7 @@ String GetScenarioPreRejectReason(int scenario, float demandW) {
   if (scenario == 5) {
     if (batteryVoltage < BATTERY_MIN_VOLTAGE) return "battery voltage too low";
     if (batterySOC <= BATTERY_LOW_SOC) return "battery SOC too low";
-    if (demandW > BATTERY_MAX_DISCHARGE_CURRENT_A * batteryVoltage) return "demand above battery test limit";
+    if (demandW > BATTERY_MAX_DISCHARGE_POWER_W + SAFETY_MARGIN_W) return "demand above battery test limit";
     return "";
   }
 

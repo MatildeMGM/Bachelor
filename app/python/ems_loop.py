@@ -7,6 +7,7 @@ from arduino.app_bricks.web_ui import WebUI
 
 from bridge import (
     fetch_arduino_status,
+    push_config_to_mcu,
     push_price_to_mcu,
     push_scenario_to_mcu,
 )
@@ -17,10 +18,11 @@ from config import (
     DK_TZ,
     VALID_PRICE_ZONES,
 )
-from app.python.data.price_data.prices import fetch_prices_for_today
+from data.price_data.prices import fetch_prices_for_today
 from ems_state import known_clients, state, state_lock
 from scheduler import (
     SchedulerConfig,
+    build_config_command,
     decide_current_scenario,
     load_limits,
     load_scaled_demand_profile,
@@ -31,6 +33,8 @@ ui = WebUI()
 limits = load_limits()
 state.configure_hydrogen_estimator(limits)
 scheduler_config = SchedulerConfig()
+mcu_config_command = build_config_command(limits, scheduler_config)
+mcu_config_sent = False
 DEMO_START_DELAY_SECONDS = 5.0
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_FIELDS = [
@@ -56,8 +60,8 @@ LOG_FIELDS = [
     "battery_soc_percent",
     "battery_energy_wh",
     "pem_hydrogen_est_ml",
-    "pem_charge_c",
-    "pem_discharge_c",
+    "pem_charge_j",
+    "pem_discharge_j",
     "battery_voltage_v",
     "pem_voltage_v",
     "command",
@@ -178,8 +182,8 @@ def build_payload():
         "arduino_status": state.arduino_status,
         "ems_estimates": {
             "estimated_hydrogen_mL": state.pem_hydrogen_ml,
-            "pem_charge_C": state.pem_charge_c,
-            "pem_discharge_C": state.pem_discharge_c,
+            "pem_charge_J": state.pem_charge_j,
+            "pem_discharge_J": state.pem_discharge_j,
             "measured_full_hydrogen_capacity_mL": state.pem_hydrogen_capacity_ml,
         },
     }
@@ -229,6 +233,8 @@ def refresh_inputs():
 
 
 def arm_demo_start(delay_seconds=DEMO_START_DELAY_SECONDS):
+    global mcu_config_sent
+
     start_monotonic = time.monotonic() + delay_seconds
     start_epoch_ms = int((time.time() + delay_seconds) * 1000)
 
@@ -243,6 +249,7 @@ def arm_demo_start(delay_seconds=DEMO_START_DELAY_SECONDS):
         tz=DK_TZ,
     ).isoformat(timespec="milliseconds")
     state.reset_hydrogen_estimator()
+    mcu_config_sent = False
     update_current_inputs()
     start_demo_log()
 
@@ -321,8 +328,8 @@ def log_current_slot():
         "battery_soc_percent": status.get("batterySOC", ""),
         "battery_energy_wh": status.get("batteryEnergyWh", ""),
         "pem_hydrogen_est_ml": state.pem_hydrogen_ml,
-        "pem_charge_c": state.pem_charge_c,
-        "pem_discharge_c": state.pem_discharge_c,
+        "pem_charge_j": state.pem_charge_j,
+        "pem_discharge_j": state.pem_discharge_j,
         "battery_voltage_v": status.get("batteryVoltage", ""),
         "pem_voltage_v": status.get("pemrfcVoltage", ""),
         "command": state.current_command,
@@ -337,6 +344,8 @@ def log_current_slot():
 
 
 def publish_state(push_bridge=True):
+    global mcu_config_sent
+
     with state_lock:
         update_current_inputs()
 
@@ -345,6 +354,10 @@ def publish_state(push_bridge=True):
             run_scheduler_decision()
 
             if push_bridge:
+                if not mcu_config_sent:
+                    push_config_to_mcu(mcu_config_command)
+                    mcu_config_sent = True
+
                 push_price_to_mcu()
 
                 scenario_key = (state.demo_cycle, state.current_slot)

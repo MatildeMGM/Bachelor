@@ -18,7 +18,9 @@ from config import (
     HIGH_PRICE_THRESHOLD_DKK_PER_KWH,
     LOW_DEMAND_THRESHOLD_MILLIWATT,
     LOW_PRICE_THRESHOLD_DKK_PER_KWH,
+    MAX_DEMAND_MILLIWATT,
 )
+from parameters import DEFAULT_SUMMARY_PARAMETERS_PATH, get_parameter, load_summary_parameters
 
 
 APP_PYTHON_DIR = Path(__file__).resolve().parent
@@ -29,8 +31,7 @@ DEMAND_PROFILE_PATH = (
     / "variable_load_signal"
     / "scaled_may_power_profile_15min.csv"
 )
-MIN_DEMAND_POWER_MW = 20.0
-TEMPORARY_PV_TO_PEM_CHARGE_POWER_MW = 20.0
+MIN_DEMAND_POWER_MW = get_parameter("MIN_DEMAND_POWER_MILLIWATT", 20.0)
 
 
 SCENARIO_DESCRIPTIONS = {
@@ -47,8 +48,11 @@ SCENARIO_DESCRIPTIONS = {
 class BatteryLimits:
     min_voltage_v: float
     full_voltage_v: float
+    empty_test_voltage_v: float
+    full_test_voltage_v: float
     usable_energy_wh: float
     max_discharge_power_w: float
+    low_soc_percent: float
     medium_soc_percent: float
     high_soc_percent: float
     reserve_soc_percent: float = 20.0
@@ -64,10 +68,12 @@ class PEMLimits:
     full_hydrogen_ml: float
     medium_hydrogen_ml: float
     high_hydrogen_ml: float
-    hydrogen_coulomb_efficiency: float
-    theoretical_hydrogen_production_mL_per_C: float
     hydrogen_production_mL_per_input_j: float
     hydrogen_consumption_mL_per_output_j: float
+    useful_output_duration_s: float
+    useful_output_energy_j: float
+    hydrogen_for_useful_output_ml: float
+    charge_energy_for_useful_output_j: float
     startup_delay_s: float
 
 
@@ -120,117 +126,94 @@ class SchedulerConfig:
     price_low_quantile: float = 0.35
     price_high_quantile: float = 0.70
     lookahead_slots: int = 96
-    safety_margin_w: float = 0.005
-    min_switch_seconds: float = 2.0
+    safety_margin_w: float = get_parameter("SAFETY_MARGIN_W", 0.005)
+    min_switch_seconds: float = get_parameter("MIN_SWITCH_SECONDS", 2.0)
 
 
 def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
-    """Load the operating limits found during data processing."""
+    """Load operating limits from the app's packaged summary file."""
 
-    base = Path(data_dir)
+    summary_path = Path(data_dir) / "summary_parameters.txt"
+    if not summary_path.exists():
+        summary_path = DEFAULT_SUMMARY_PARAMETERS_PATH
 
-    battery_state = pd.read_csv(base / "processed_Battery" / "battery_state_table.csv")
-    battery_discharge = pd.read_csv(
-        base / "processed_Battery" / "battery_discharge_summary.csv"
-    ).iloc[0]
+    params = load_summary_parameters(summary_path)
 
-    pem_params = pd.read_csv(base / "processed_PEM" / "pem_control_parameters.csv").iloc[0]
+    def p(name: str, default: float) -> float:
+        return float(params.get(name, default))
 
-    pv_params = pd.read_csv(base / "processed_PV" / "pv_control_parameters.csv").iloc[0]
+    max_demand_w = p("MAX_DEMAND_MILLIWATT", MAX_DEMAND_MILLIWATT) / 1000.0
+    battery_capacity_wh = p("EMS_BATTERY_CAPACITY_MILLIWATT_HOUR", 100.0) / 1000.0
+    battery_min_voltage_v = p("BATTERY_MIN_VOLTAGE", 3.0)
+    battery_full_voltage_v = p("BATTERY_FULL_VOLTAGE", p("BATTERY_MAX_VOLTAGE", 4.2))
+    battery_empty_test_voltage_v = p("BATTERY_EMPTY_TEST_VOLTAGE", battery_min_voltage_v)
+    battery_full_test_voltage_v = p("BATTERY_FULL_TEST_VOLTAGE", 3.97)
+    battery_low_soc_percent = p("BATTERY_LOW_SOC_PERCENT", 10.0)
+    battery_medium_soc_percent = p("BATTERY_MEDIUM_SOC_PERCENT", 40.0)
+    battery_high_soc_percent = p("BATTERY_HIGH_SOC_PERCENT", 60.0)
+    battery_reserve_soc_percent = p("BATTERY_RESERVE_SOC_PERCENT", 20.0)
+    battery_full_soc_percent = p("BATTERY_FULL_SOC_PERCENT", 90.0)
 
-    battery_medium_soc = _state_min(
-        battery_state,
-        state_column="ems_state",
-        state_value="MEDIUM",
-        value_column="soc_min_percent",
-        default=40.0,
-    )
-    battery_high_soc = _state_min(
-        battery_state,
-        state_column="ems_state",
-        state_value="HIGH",
-        value_column="soc_min_percent",
-        default=60.0,
-    )
-    pv_battery_charging_power_w = (
-        float(pv_params["min_pv_power_for_battery_charging_mW"]) / 1000.0
-    )
-    # Temporary demo override: the experimentally defensible PV -> PEM
-    # threshold is higher than the measured PV ramp capability, so this keeps
-    # the app runnable while the hardware/control strategy is being tested.
-    pv_pem_charging_power_w = TEMPORARY_PV_TO_PEM_CHARGE_POWER_MW / 1000.0
-    pv_load_power_w = float(pv_params["min_pv_power_for_load_supply_mW"]) / 1000.0
-    pem_hydrogen_production = pd.to_numeric(
-        pem_params["hydrogen_production_mL_per_input_J"],
-        errors="coerce",
-    )
-    pem_hydrogen_coulomb_efficiency = pd.to_numeric(
-        pem_params["hydrogen_coulomb_efficiency"],
-        errors="coerce",
-    )
-    pem_hydrogen_production_per_c = pd.to_numeric(
-        pem_params["theoretical_hydrogen_production_mL_per_C"],
-        errors="coerce",
-    )
-    pem_hydrogen_consumption = pd.to_numeric(
-        pem_params["hydrogen_consumption_mL_per_output_J"],
-        errors="coerce",
-    )
-    pem_startup_delay = pd.to_numeric(
-        pem_params["minimum_wait_after_switching_to_fuel_cell_s"],
-        errors="coerce",
-    )
-    pem_full_hydrogen = pd.to_numeric(
-        pem_params["measured_full_hydrogen_capacity_mL"],
-        errors="coerce",
-    )
-    if pd.isna(pem_full_hydrogen):
-        pem_full_hydrogen = 0.0
-    pem_medium_hydrogen = 0.35 * float(pem_full_hydrogen)
-    pem_high_hydrogen = 0.65 * float(pem_full_hydrogen)
-    pem_ml_per_c = (
-        float(pem_hydrogen_coulomb_efficiency)
-        * float(pem_hydrogen_production_per_c)
-    )
-    pem_min_hydrogen = (
-        float(pem_params["maximum_electrolysis_current_A"])
-        * float(pem_params["minimum_charge_time_before_useful_discharge_s"])
-        * pem_ml_per_c
-    )
+    pem_full_hydrogen = p("MEASURED_FULL_HYDROGEN_CAPACITY_ML", 0.0)
+    pem_hydrogen_for_useful_output = p("PEM_HYDROGEN_FOR_USEFUL_OUTPUT_ML", 0.0)
+    pem_medium_hydrogen = p("PEM_MEDIUM_HYDROGEN_ML", 0.35 * pem_full_hydrogen)
+    pem_high_hydrogen = p("PEM_HIGH_HYDROGEN_ML", 0.65 * pem_full_hydrogen)
+
+    pv_max_power_w = p("PV_MAX_POWER_W", 0.0)
+    pv_load_voltage_v = p("PV_MIN_LOAD_SUPPLY_VOLTAGE", 4.2812)
+    pv_load_power_w = p("PV_MIN_LOAD_SUPPLY_POWER_W", max_demand_w)
+    pv_battery_charging_power_w = p("PV_MIN_BATTERY_CHARGING_POWER_W", 0.020)
+    pv_pem_charging_power_w = p("PV_MIN_PEM_CHARGING_POWER_W", 0.020)
 
     return EMSLimits(
         battery=BatteryLimits(
-            min_voltage_v=float(battery_state["voltage_min_V"].min()),
-            full_voltage_v=4.2,
-            usable_energy_wh=float(battery_discharge["usable_energy_Wh"]),
-            max_discharge_power_w=float(battery_discharge["max_discharge_power_W"]),
-            medium_soc_percent=battery_medium_soc,
-            high_soc_percent=battery_high_soc,
+            min_voltage_v=battery_min_voltage_v,
+            full_voltage_v=battery_full_voltage_v,
+            empty_test_voltage_v=battery_empty_test_voltage_v,
+            full_test_voltage_v=battery_full_test_voltage_v,
+            usable_energy_wh=battery_capacity_wh,
+            max_discharge_power_w=p("BATTERY_MAX_DISCHARGE_POWER_W", max_demand_w),
+            low_soc_percent=battery_low_soc_percent,
+            medium_soc_percent=battery_medium_soc_percent,
+            high_soc_percent=battery_high_soc_percent,
+            reserve_soc_percent=battery_reserve_soc_percent,
+            full_soc_percent=battery_full_soc_percent,
         ),
         pem=PEMLimits(
-            min_voltage_v=float(pem_params["minimum_usable_fuel_cell_voltage_V"]),
-            minimum_electrolysis_power_w=float(pem_params["minimum_electrolysis_power_W"]),
-            min_hydrogen_ml=pem_min_hydrogen,
-            max_discharge_power_w=float(pem_params["maximum_usable_discharge_power_W"]),
-            full_hydrogen_ml=float(pem_full_hydrogen),
+            min_voltage_v=p("PEM_MIN_USABLE_VOLTAGE", 0.54975),
+            minimum_electrolysis_power_w=p(
+                "PEM_MIN_ELECTROLYSIS_POWER_W",
+                pv_pem_charging_power_w,
+            ),
+            min_hydrogen_ml=p("PEM_MIN_HYDROGEN_ML", pem_hydrogen_for_useful_output),
+            max_discharge_power_w=p("PEM_MAX_DISCHARGE_POWER_W", 0.03195),
+            full_hydrogen_ml=pem_full_hydrogen,
             medium_hydrogen_ml=pem_medium_hydrogen,
             high_hydrogen_ml=pem_high_hydrogen,
-            hydrogen_coulomb_efficiency=float(pem_hydrogen_coulomb_efficiency),
-            theoretical_hydrogen_production_mL_per_C=float(pem_hydrogen_production_per_c),
-            hydrogen_production_mL_per_input_j=float(pem_hydrogen_production),
-            hydrogen_consumption_mL_per_output_j=float(pem_hydrogen_consumption),
-            startup_delay_s=float(pem_startup_delay),
+            hydrogen_production_mL_per_input_j=p("HYDROGEN_PRODUCTION_ML_PER_INPUT_J", 0.0),
+            hydrogen_consumption_mL_per_output_j=p(
+                "HYDROGEN_CONSUMPTION_ML_PER_OUTPUT_J",
+                0.0,
+            ),
+            useful_output_duration_s=p("USEFUL_PEM_OUTPUT_DURATION_S", 60.0),
+            useful_output_energy_j=p("PEM_USEFUL_OUTPUT_ENERGY_J", 0.0),
+            hydrogen_for_useful_output_ml=pem_hydrogen_for_useful_output,
+            charge_energy_for_useful_output_j=p("PEM_CHARGE_ENERGY_FOR_USEFUL_OUTPUT_J", 0.0),
+            startup_delay_s=p("PEM_STARTUP_DELAY_S", get_parameter("MIN_SWITCH_SECONDS", 2.0)),
         ),
         pv=PVLimits(
-            min_battery_charging_voltage_v=float(pv_params["min_pv_voltage_for_battery_charging_V"]),
-            min_pem_charging_voltage_v=0.0,
-            min_load_supply_voltage_v=float(pv_params["min_pv_voltage_for_load_supply_V"]),
+            min_battery_charging_voltage_v=p(
+                "PV_MIN_BATTERY_CHARGING_VOLTAGE",
+                pv_load_voltage_v,
+            ),
+            min_pem_charging_voltage_v=p("PV_MIN_PEM_CHARGING_VOLTAGE", pv_load_voltage_v),
+            min_load_supply_voltage_v=pv_load_voltage_v,
             min_battery_charging_power_w=pv_battery_charging_power_w,
             min_pem_charging_power_w=pv_pem_charging_power_w,
             min_load_supply_power_w=pv_load_power_w,
-            max_power_w=float(pv_params["max_measured_pv_power_mW"]) / 1000.0,
-            medium_power_w=pv_pem_charging_power_w,
-            high_power_w=pv_load_power_w,
+            max_power_w=pv_max_power_w,
+            medium_power_w=p("PV_MEDIUM_POWER_W", pv_pem_charging_power_w),
+            high_power_w=p("PV_HIGH_POWER_W", pv_load_power_w),
         ),
     )
 
@@ -499,9 +482,8 @@ def calculate_battery_reserve_soc(
         if prices_96[slot] >= high_price:
             future_expensive_load_wh += demand_96[slot] * config.simulated_slot_hours
 
-    reserve_from_lookahead = (
-        100.0 * future_expensive_load_wh / limits.battery.usable_energy_wh
-    )
+    usable_energy_wh = max(limits.battery.usable_energy_wh, 0.001)
+    reserve_from_lookahead = 100.0 * future_expensive_load_wh / usable_energy_wh
 
     return float(
         np.clip(
@@ -637,6 +619,25 @@ def build_scenario_command(
     )
 
 
+def build_config_command(limits: EMSLimits, config: SchedulerConfig) -> str:
+    """Configuration frame that keeps Arduino safety checks aligned with Python."""
+
+    return (
+        "CONFIG,"
+        f"{limits.battery.min_voltage_v:.5f},"
+        f"{limits.battery.full_voltage_v:.5f},"
+        f"{limits.battery.empty_test_voltage_v:.5f},"
+        f"{limits.battery.full_test_voltage_v:.5f},"
+        f"{limits.battery.usable_energy_wh * 1000.0:.3f},"
+        f"{limits.battery.low_soc_percent:.2f},"
+        f"{limits.battery.full_soc_percent:.2f},"
+        f"{_command_power_mw(limits.battery.max_discharge_power_w):.3f},"
+        f"{limits.pem.min_voltage_v:.5f},"
+        f"{_command_power_mw(limits.pem.max_discharge_power_w):.3f},"
+        f"{_command_power_mw(config.safety_margin_w):.3f}"
+    )
+
+
 def _as_96_values(values: Iterable[float], name: str) -> list[float]:
     values = [float(value) for value in values]
 
@@ -647,26 +648,6 @@ def _as_96_values(values: Iterable[float], name: str) -> list[float]:
         raise ValueError(f"{name} must contain 24 or 96 values, got {len(values)}.")
 
     return values
-
-
-def _state_min(
-    table: pd.DataFrame,
-    *,
-    state_column: str,
-    state_value: str,
-    value_column: str,
-    default: float,
-) -> float:
-    if state_column not in table.columns or value_column not in table.columns:
-        return float(default)
-
-    rows = table[table[state_column].astype(str).str.upper() == state_value]
-    values = pd.to_numeric(rows[value_column], errors="coerce").dropna()
-
-    if values.empty:
-        return float(default)
-
-    return float(values.min())
 
 
 def _threshold_reached(value: float, threshold: float) -> bool:

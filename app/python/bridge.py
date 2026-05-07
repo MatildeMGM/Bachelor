@@ -71,6 +71,16 @@ def push_price_to_mcu():
     Bridge.call("apply_price_frame", payload, timeout=BRIDGE_TIMEOUT)
 
 
+def push_config_to_mcu(command):
+    if not command:
+        return
+
+    now_str = get_now().strftime("%H:%M:%S")
+    print("[{}] SENDING EMS CONFIG TO MCU: {}".format(now_str, command))
+
+    return Bridge.call("apply_config_frame", command, timeout=BRIDGE_TIMEOUT)
+
+
 def push_scenario_to_mcu(command):
     if not command:
         return
