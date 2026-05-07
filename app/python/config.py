@@ -21,8 +21,8 @@ DEMO_ENABLED = True
 
 # Relative state thresholds used by the EMS scheduler.
 # Demand profile values are stored in mW before scheduler loading.
-LOW_DEMAND_THRESHOLD_MW = 43.31
-HIGH_DEMAND_THRESHOLD_MW = 66.01
+LOW_DEMAND_THRESHOLD_MILLIWATT = 43.31
+HIGH_DEMAND_THRESHOLD_MILLIWATT = 66.01
 
 # Spot prices are classified in DKK/kWh.
 LOW_PRICE_THRESHOLD_DKK_PER_KWH = 0.2857

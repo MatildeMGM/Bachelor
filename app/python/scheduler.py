@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    HIGH_DEMAND_THRESHOLD_MW,
+    HIGH_DEMAND_THRESHOLD_MILLIWATT,
     HIGH_PRICE_THRESHOLD_DKK_PER_KWH,
-    LOW_DEMAND_THRESHOLD_MW,
+    LOW_DEMAND_THRESHOLD_MILLIWATT,
     LOW_PRICE_THRESHOLD_DKK_PER_KWH,
 )
 
@@ -411,8 +411,8 @@ def classify_inputs(
 def classify_demand(demand_w: float, demand_96: list[float]) -> str:
     """Classify demand using the configured demand thresholds."""
 
-    low = LOW_DEMAND_THRESHOLD_MW / 1000.0
-    high = HIGH_DEMAND_THRESHOLD_MW / 1000.0
+    low = LOW_DEMAND_THRESHOLD_MILLIWATT / 1000.0
+    high = HIGH_DEMAND_THRESHOLD_MILLIWATT / 1000.0
     return _low_medium_high(demand_w, low, high)
 
 
