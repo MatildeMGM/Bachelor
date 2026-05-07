@@ -60,9 +60,13 @@ float BATTERY_FULL_SOC = 90.0;
 float PEM_MIN_USABLE_VOLTAGE = 0.54975;
 float PEM_MAX_DISCHARGE_POWER_W = 0.03195;
 float SAFETY_MARGIN_W = 0.005;
+const float BATTERY_VOLTAGE_CORRECTION_V = 0.068;
+const float LOAD_VOLTAGE_CORRECTION_V = 0.066;
 const float PV_VOLTAGE_CORRECTION_V = 0.180;
-const float PV_CURRENT_CORRECTION_A = 0.000138;
 const float PEM_VOLTAGE_CORRECTION_V = 0.064;
+const float BATTERY_CURRENT_CORRECTION_A = 0.000563;
+const float LOAD_CURRENT_CORRECTION_A = -0.000033;
+const float PV_CURRENT_CORRECTION_A = 0.000138;
 const float PEM_CURRENT_SCALE = 0.843;
 const float PEM_CURRENT_OFFSET_A = 0.001;
 const unsigned long PV_LOADED_SETTLING_MS = 1200;
@@ -528,12 +532,12 @@ void GetVoltage() {
 
   if (inaBatOk) {
     inaBat.readAndClearFlags();
-    batteryVoltage = inaBat.getBusVoltage_V();
+    batteryVoltage = inaBat.getBusVoltage_V() - BATTERY_VOLTAGE_CORRECTION_V;
   }
 
   if (inaLoadOk) {
     inaLoad.readAndClearFlags();
-    loadVoltage = inaLoad.getBusVoltage_V();
+    loadVoltage = inaLoad.getBusVoltage_V() - LOAD_VOLTAGE_CORRECTION_V;
   }
 
   if (inaPVOk) {
@@ -550,12 +554,12 @@ void GetVoltage() {
 void GetCurrent() {
   if (inaBatOk) {
     BatshuntVoltage_mV = inaBat.getShuntVoltage_mV();
-    Batcurrent = inaBat.getCurrent_mA() / 1000.0;
+    Batcurrent = (inaBat.getCurrent_mA() / 1000.0) + BATTERY_CURRENT_CORRECTION_A;
   }
 
   if (inaLoadOk) {
     LoadshuntVoltage_mV = inaLoad.getShuntVoltage_mV();
-    Loadcurrent = inaLoad.getCurrent_mA() / 1000.0;
+    Loadcurrent = (inaLoad.getCurrent_mA() / 1000.0) + LOAD_CURRENT_CORRECTION_A;
   }
 
   if (inaPVOk) {
