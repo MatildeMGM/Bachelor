@@ -11,7 +11,7 @@ INA226_WE ina226(&Wire, INA226_ADDRESS);
 // -------------------------
 const int DAC_PIN = A0;          // UNO R4 WiFi DAC pin
 const float DAC_REF_V = 5.0f;    // DAC full-scale reference
-const float DAC_MAX_V = 2.5f;    // clamp DAC output to max 2.5 V
+const float DAC_MAX_V = 2.5f;    // Default: clamp DAC output to max 2.5 V
 const int DAC_MAX_CODE = (int)((DAC_MAX_V / DAC_REF_V) * 4095.0f + 0.5f);
 
 // -------------------------
@@ -53,7 +53,7 @@ float rampStartCurrent_A = 0.000f;
 float rampStep_A = 0.005f;            //0.005 = 5 mA
 float rampMaxCurrent_A = 0.500f;      //0.150 = 150 mA 
 
-unsigned long rampIntervalMs = 2000; // 5000 = 5 seconds
+unsigned long rampIntervalMs = 5000; // 5000 = 5 seconds
 unsigned long lastRampMs = 0;
 
 // -------------------------
@@ -86,22 +86,22 @@ bool filterInitialized  = false;
 
 const float CURRENT_FILTER_ALPHA = 0.18f;
 const float POWER_FILTER_ALPHA   = 0.18f;
-const float CURRENT_DEADBAND_A   = 0.003f;
-const float POWER_DEADBAND_W     = 0.005f;
+const float CURRENT_DEADBAND_A   = 0.005f;
+const float POWER_DEADBAND_W     = 0.005f; //0.005 at 20mW works
 
 // Soft limit margin
 const float SOFT_LIMIT_FRAC = 0.92f;
 
 // Dynamic hard-fault margins above user limits
 const float CURRENT_FAULT_MARGIN_A = 0.08f;
-const float POWER_FAULT_MARGIN_W   = 0.20f;
+const float POWER_FAULT_MARGIN_W   = 0.08f;
 
 // -------------------------
 // Weak source collapse detection
 // -------------------------
 float healthyBusVoltage_V = 0.0f;
-const float COLLAPSE_FRAC = 0.80f;
-const int COLLAPSE_BACKOFF = 100;
+const float COLLAPSE_FRAC = 0.90f;  //Default 80
+const int COLLAPSE_BACKOFF = 10; //Default 20
 
 // -------------------------
 // Measurements
@@ -721,7 +721,7 @@ void setup() {
   }
 
   ina226.setCorrectionFactor(INA_CORRECTION_FACTOR);
-  ina226.setAverage(INA226_AVERAGE_16);
+  ina226.setAverage(INA226_AVERAGE_16); // 16 default
   ina226.setConversionTime(INA226_CONV_TIME_1100);
   ina226.setMeasureMode(INA226_CONTINUOUS);
   ina226.waitUntilConversionCompleted();

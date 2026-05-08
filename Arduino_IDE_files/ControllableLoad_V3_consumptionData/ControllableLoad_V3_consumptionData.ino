@@ -14,8 +14,19 @@ INA226_WE ina226(&Wire, INA226_ADDRESS);
 // -------------------------
 const int DAC_PIN = A0;          // UNO R4 WiFi DAC pin
 const float DAC_REF_V = 5.0f;    // DAC full-scale reference
-const float DAC_MAX_V = 2.5f;    // Clamp DAC output to max 2.5 V
+const float DAC_MAX_V = 5.0f;    // Clamp DAC output to max 2.5 V
 const int DAC_MAX_CODE = (int)((DAC_MAX_V / DAC_REF_V) * 4095.0f + 0.5f);
+
+// -------------------------
+// Startup DAC behavior
+// -------------------------
+// Your measurements show that DAC=1000 is too low.
+// DAC around 1450-1500 is much closer to the useful MOSFET region.
+int DAC_START_CODE = 1450;
+bool USE_DAC_START_PRELOAD = true;
+
+// Only preload if the requested profile power is above this.
+const float START_PRELOAD_MIN_POWER_W = 0.005f;
 
 // -------------------------
 // INA correction
@@ -35,7 +46,7 @@ int profileLength = 0;
 // 96 points therefore gives 12 minutes per simulated day.
 const unsigned long PROFILE_STEP_INTERVAL_MS = 7500;
 
-// Set this depending on the units in profile_csv.h
+// Set this depending on the units in profile_csv.h.
 // Current file uses power_mW, so this should remain true.
 const bool CSV_POWER_IS_MW = true;
 
@@ -75,15 +86,27 @@ unsigned long lastPrintMs = 0;
 
 // Dead-zone / knee handling
 const int DAC_KNEE_CODE = 1400;
-const int DAC_FAST_APPROACH_TARGET = 1360;
+
+// Fast approach should go above the normal MOSFET knee.
+// This prevents the controller from spending too long around DAC 1400-1500.
+int DAC_FAST_APPROACH_TARGET = 1600;
+
+// Threshold for deciding whether current has started flowing.
 const float CURRENT_FLOW_THRESHOLD_A = 0.010f;
 
 // Step sizes
-const int STEP_FAST = 60;
+int STEP_FAST = 80;
 const int STEP_MEDIUM = 6;
 const int STEP_SMALL = 2;
 const int STEP_TINY = 1;
 const int STEP_BACKOFF = 12;
+
+// Relative power control step sizes.
+// These are intentionally larger than the old tiny low-power steps.
+const int STEP_POWER_VERY_FAR = 20;
+const int STEP_POWER_FAR = 12;
+const int STEP_POWER_MEDIUM = 6;
+const int STEP_POWER_NEAR = 3;
 
 // Filter / damping
 float filteredCurrent_A = 0.0f;
@@ -92,7 +115,7 @@ bool filterInitialized = false;
 
 const float CURRENT_FILTER_ALPHA = 0.18f;
 const float POWER_FILTER_ALPHA = 0.18f;
-const float POWER_DEADBAND_W = 0.001f; //default 0.005
+const float POWER_DEADBAND_W = 0.005f;
 
 // Soft limit margin
 const float SOFT_LIMIT_FRAC = 0.92f;
@@ -105,8 +128,12 @@ const float POWER_FAULT_MARGIN_W = 0.20f;
 // Weak source collapse detection
 // -------------------------
 float healthyBusVoltage_V = 0.0f;
-const float COLLAPSE_FRAC = 0.80f;
-const int COLLAPSE_BACKOFF = 100;
+
+// Your faster script used 0.90 and smaller backoff.
+// The original CSV script used 0.80 and larger backoff.
+// This is a moderate setting.
+const float COLLAPSE_FRAC = 0.85f;
+const int COLLAPSE_BACKOFF = 50;
 
 // -------------------------
 // Measurements
@@ -129,8 +156,13 @@ String faultMessage = "";
 // Helpers
 // -------------------------
 void setDACCode(int value) {
-  if (value < 0) value = 0;
-  if (value > DAC_MAX_CODE) value = DAC_MAX_CODE;
+  if (value < 0) {
+    value = 0;
+  }
+
+  if (value > DAC_MAX_CODE) {
+    value = DAC_MAX_CODE;
+  }
 
   dacCode = value;
   analogWrite(DAC_PIN, dacCode);
@@ -203,6 +235,7 @@ bool loadProfileFromCSV() {
 
     // Skip header line if it contains letters.
     bool containsLetter = false;
+
     for (const char *q = lineStart; q < lineEnd; q++) {
       if ((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z')) {
         containsLetter = true;
@@ -258,6 +291,9 @@ bool loadProfileFromCSV() {
   return true;
 }
 
+// -------------------------
+// INA226 measurements
+// -------------------------
 void readINA226() {
   shuntVoltage_mV = ina226.getShuntVoltage_mV();
   busVoltage_V = ina226.getBusVoltage_V();
@@ -267,10 +303,21 @@ void readINA226() {
   current_A = current_mA / 1000.0f;
   power_W = power_mW / 1000.0f;
 
-  if (shuntVoltage_mV < 0) shuntVoltage_mV = 0;
-  if (busVoltage_V < 0) busVoltage_V = 0;
-  if (current_A < 0) current_A = 0;
-  if (power_W < 0) power_W = 0;
+  if (shuntVoltage_mV < 0.0f) {
+    shuntVoltage_mV = 0.0f;
+  }
+
+  if (busVoltage_V < 0.0f) {
+    busVoltage_V = 0.0f;
+  }
+
+  if (current_A < 0.0f) {
+    current_A = 0.0f;
+  }
+
+  if (power_W < 0.0f) {
+    power_W = 0.0f;
+  }
 
   if (!filterInitialized) {
     filteredCurrent_A = current_A;
@@ -305,6 +352,25 @@ void printProfilePoint() {
   Serial.println(" W");
 }
 
+void preloadDACForStartup() {
+  if (!USE_DAC_START_PRELOAD) {
+    return;
+  }
+
+  if (setPower_W <= START_PRELOAD_MIN_POWER_W) {
+    setDACCode(0);
+    return;
+  }
+
+  setDACCode(DAC_START_CODE);
+
+  Serial.print("Startup DAC preload applied: DAC=");
+  Serial.print(dacCode);
+  Serial.print(" | Vdac=");
+  Serial.print(dacVoltageFromCode(dacCode), 4);
+  Serial.println(" V");
+}
+
 void startProfile(bool restartFromBeginning) {
   if (faultLatched) {
     Serial.println("Cannot start: fault is latched. Use resetfault first.");
@@ -331,6 +397,8 @@ void startProfile(bool restartFromBeginning) {
   filterInitialized = false;
   healthyBusVoltage_V = 0.0f;
 
+  preloadDACForStartup();
+
   lastProfileStepMs = millis();
 
   Serial.println("Time-series profile started.");
@@ -343,9 +411,17 @@ void stopProfile() {
 }
 
 void updateProfile() {
-  if (!profileRunning) return;
-  if (!loadEnabled) return;
-  if (faultLatched) return;
+  if (!profileRunning) {
+    return;
+  }
+
+  if (!loadEnabled) {
+    return;
+  }
+
+  if (faultLatched) {
+    return;
+  }
 
   unsigned long now = millis();
 
@@ -430,6 +506,15 @@ void printStatus() {
   Serial.print(dacVoltageFromCode(dacCode), 4);
   Serial.print(" V");
 
+  Serial.print(" | StartDAC=");
+  Serial.print(DAC_START_CODE);
+
+  Serial.print(" | FastTarget=");
+  Serial.print(DAC_FAST_APPROACH_TARGET);
+
+  Serial.print(" | FastStep=");
+  Serial.print(STEP_FAST);
+
   Serial.print(" | Repeat=");
   Serial.print(repeatProfile ? "ON" : "OFF");
 
@@ -444,20 +529,25 @@ void printStatus() {
 void printHelp() {
   Serial.println();
   Serial.println("Commands:");
-  Serial.println("  help          -> show commands");
-  Serial.println("  status        -> print one status line");
-  Serial.println("  start         -> start or continue time-series profile");
-  Serial.println("  restart       -> start profile from first point");
-  Serial.println("  stop          -> stop profile and disable load");
-  Serial.println("  resetfault    -> clear fault latch");
-  Serial.println("  maxp 3.00     -> set hard power limit in W");
-  Serial.println("  maxi 0.80     -> set hard current limit in A");
-  Serial.println("  interval 40   -> set control interval in ms");
-  Serial.println("  print 500     -> set status print interval in ms");
-  Serial.println("  busfault on   -> enable low-bus fault");
-  Serial.println("  busfault off  -> disable low-bus fault");
-  Serial.println("  repeat on     -> loop profile continuously");
-  Serial.println("  repeat off    -> stop after one profile");
+  Serial.println("  help              -> show commands");
+  Serial.println("  status            -> print one status line");
+  Serial.println("  start             -> start or continue time-series profile");
+  Serial.println("  restart           -> start profile from first point");
+  Serial.println("  stop              -> stop profile and disable load");
+  Serial.println("  resetfault        -> clear fault latch");
+  Serial.println("  maxp 3.00         -> set hard power limit in W");
+  Serial.println("  maxi 0.80         -> set hard current limit in A");
+  Serial.println("  interval 40       -> set control interval in ms");
+  Serial.println("  print 500         -> set status print interval in ms");
+  Serial.println("  busfault on       -> enable low-bus fault");
+  Serial.println("  busfault off      -> disable low-bus fault");
+  Serial.println("  repeat on         -> loop profile continuously");
+  Serial.println("  repeat off        -> stop after one profile");
+  Serial.println("  preload on        -> enable startup DAC preload");
+  Serial.println("  preload off       -> disable startup DAC preload");
+  Serial.println("  startdac 1450     -> set startup DAC preload code");
+  Serial.println("  fasttarget 1600   -> set fast approach DAC target");
+  Serial.println("  faststep 80       -> set fast approach DAC step");
   Serial.println();
 }
 
@@ -465,7 +555,9 @@ void printHelp() {
 // Serial command handling
 // -------------------------
 void handleSerial() {
-  if (!Serial.available()) return;
+  if (!Serial.available()) {
+    return;
+  }
 
   String cmd = Serial.readStringUntil('\n');
   cmd.trim();
@@ -526,9 +618,24 @@ void handleSerial() {
     return;
   }
 
+  if (cmd == "preload on") {
+    USE_DAC_START_PRELOAD = true;
+    Serial.println("Startup DAC preload enabled.");
+    return;
+  }
+
+  if (cmd == "preload off") {
+    USE_DAC_START_PRELOAD = false;
+    Serial.println("Startup DAC preload disabled.");
+    return;
+  }
+
   if (cmd.startsWith("maxi ")) {
     float v = cmd.substring(5).toFloat();
-    if (v < 0) v = 0;
+
+    if (v < 0.0f) {
+      v = 0.0f;
+    }
 
     I_MAX_A = v;
 
@@ -540,7 +647,10 @@ void handleSerial() {
 
   if (cmd.startsWith("maxp ")) {
     float v = cmd.substring(5).toFloat();
-    if (v < 0) v = 0;
+
+    if (v < 0.0f) {
+      v = 0.0f;
+    }
 
     P_MAX_W = v;
 
@@ -552,7 +662,10 @@ void handleSerial() {
 
   if (cmd.startsWith("interval ")) {
     int v = cmd.substring(9).toInt();
-    if (v < 10) v = 10;
+
+    if (v < 10) {
+      v = 10;
+    }
 
     controlIntervalMs = (unsigned long)v;
 
@@ -564,7 +677,10 @@ void handleSerial() {
 
   if (cmd.startsWith("print ")) {
     int v = cmd.substring(6).toInt();
-    if (v < 100) v = 100;
+
+    if (v < 100) {
+      v = 100;
+    }
 
     printIntervalMs = (unsigned long)v;
 
@@ -574,7 +690,123 @@ void handleSerial() {
     return;
   }
 
+  if (cmd.startsWith("startdac ")) {
+    int v = cmd.substring(9).toInt();
+
+    if (v < 0) {
+      v = 0;
+    }
+
+    if (v > DAC_MAX_CODE) {
+      v = DAC_MAX_CODE;
+    }
+
+    DAC_START_CODE = v;
+
+    Serial.print("Startup DAC code set to ");
+    Serial.print(DAC_START_CODE);
+    Serial.print(" | Vdac=");
+    Serial.print(dacVoltageFromCode(DAC_START_CODE), 4);
+    Serial.println(" V");
+    return;
+  }
+
+  if (cmd.startsWith("fasttarget ")) {
+    int v = cmd.substring(11).toInt();
+
+    if (v < 0) {
+      v = 0;
+    }
+
+    if (v > DAC_MAX_CODE) {
+      v = DAC_MAX_CODE;
+    }
+
+    DAC_FAST_APPROACH_TARGET = v;
+
+    Serial.print("Fast approach target set to DAC=");
+    Serial.print(DAC_FAST_APPROACH_TARGET);
+    Serial.print(" | Vdac=");
+    Serial.print(dacVoltageFromCode(DAC_FAST_APPROACH_TARGET), 4);
+    Serial.println(" V");
+    return;
+  }
+
+  if (cmd.startsWith("faststep ")) {
+    int v = cmd.substring(9).toInt();
+
+    if (v < 1) {
+      v = 1;
+    }
+
+    if (v > 500) {
+      v = 500;
+    }
+
+    STEP_FAST = v;
+
+    Serial.print("Fast approach step set to ");
+    Serial.println(STEP_FAST);
+    return;
+  }
+
   Serial.println("Unknown command. Type 'help'.");
+}
+
+// -------------------------
+// Power-control helper
+// -------------------------
+void applyRelativePowerControl(float effectivePowerTarget) {
+  float error_W = effectivePowerTarget - filteredPower_W;
+  float absError_W = fabs(error_W);
+
+  if (absError_W <= POWER_DEADBAND_W) {
+    return;
+  }
+
+  bool sourceCollapsed =
+    (healthyBusVoltage_V > 0.0f) &&
+    (busVoltage_V < COLLAPSE_FRAC * healthyBusVoltage_V) &&
+    (dacCode > DAC_KNEE_CODE);
+
+  if (sourceCollapsed) {
+    setDACCode(dacCode - COLLAPSE_BACKOFF);
+    return;
+  }
+
+  // Relative power tells us how far we are from the target.
+  // This fixes the slow behavior at low targets such as 0.044 W.
+  float relativePower = 0.0f;
+
+  if (effectivePowerTarget > 0.001f) {
+    relativePower = filteredPower_W / effectivePowerTarget;
+  }
+
+  if (error_W > 0.0f) {
+    int step = STEP_TINY;
+
+    if (relativePower < 0.25f) {
+      step = STEP_POWER_VERY_FAR;
+    } else if (relativePower < 0.50f) {
+      step = STEP_POWER_FAR;
+    } else if (relativePower < 0.75f) {
+      step = STEP_POWER_MEDIUM;
+    } else if (relativePower < 0.90f) {
+      step = STEP_POWER_NEAR;
+    } else {
+      step = STEP_TINY;
+    }
+
+    setDACCode(dacCode + step);
+  } else {
+    // Above target.
+    // Back off more strongly if we overshot significantly.
+    if (filteredPower_W > 1.25f * effectivePowerTarget) {
+      setDACCode(dacCode - STEP_BACKOFF);
+    } else {
+      setDACCode(dacCode - STEP_SMALL);
+    }
+  }
 }
 
 // -------------------------
@@ -593,7 +825,7 @@ void controlLoop() {
     return;
   }
 
-  // Update healthy source voltage estimate
+  // Update healthy source voltage estimate.
   if (healthyBusVoltage_V <= 0.0f) {
     healthyBusVoltage_V = busVoltage_V;
   }
@@ -609,7 +841,7 @@ void controlLoop() {
   float hardCurrentLimit = I_MAX_A + CURRENT_FAULT_MARGIN_A;
   float hardPowerLimit = P_MAX_W + POWER_FAULT_MARGIN_W;
 
-  // Hard faults
+  // Hard faults.
   if (current_A > hardCurrentLimit) {
     tripFault("Overcurrent");
     return;
@@ -636,7 +868,13 @@ void controlLoop() {
     effectivePowerTarget = P_MAX_W;
   }
 
-  // Dynamic current ceiling from power limit
+  // If target is effectively zero, turn off the DAC.
+  if (effectivePowerTarget <= 0.0f) {
+    setDACCode(0);
+    return;
+  }
+
+  // Dynamic current ceiling from power limit.
   float iAllowedByPower = I_MAX_A;
 
   if (busVoltage_V > 0.1f) {
@@ -647,7 +885,7 @@ void controlLoop() {
     }
   }
 
-  // Soft protection zones
+  // Soft protection zones.
   float softCurrentLimit = SOFT_LIMIT_FRAC * iAllowedByPower;
   float softPowerLimit = SOFT_LIMIT_FRAC * P_MAX_W;
 
@@ -661,48 +899,20 @@ void controlLoop() {
     return;
   }
 
-  // Fast approach through the DAC dead-zone.
-  // Disabled for very small power targets to avoid overshoot.
-  if ((effectivePowerTarget > 0.20f) &&
+  // Fast ramp through MOSFET dead-zone.
+  //
+  // This intentionally does not require Pset > 0.20 W.
+  // Your profile contains small targets around 0.04 W, and the old condition
+  // made those points ramp far too slowly.
+  if ((effectivePowerTarget > START_PRELOAD_MIN_POWER_W) &&
       (filteredCurrent_A < CURRENT_FLOW_THRESHOLD_A) &&
       (dacCode < DAC_FAST_APPROACH_TARGET)) {
     setDACCode(dacCode + STEP_FAST);
     return;
   }
 
-  // Constant power control
-  float error_W = effectivePowerTarget - filteredPower_W;
-  float absError_W = fabs(error_W);
-
-  if (absError_W <= POWER_DEADBAND_W) {
-    return;
-  }
-
-  bool sourceCollapsed =
-    (healthyBusVoltage_V > 0.0f) &&
-    (busVoltage_V < COLLAPSE_FRAC * healthyBusVoltage_V) &&
-    (dacCode > DAC_KNEE_CODE);
-
-  if (sourceCollapsed) {
-    setDACCode(dacCode - COLLAPSE_BACKOFF);
-    return;
-  }
-
-  int step = STEP_TINY;
-
-  if (absError_W > 0.30f) {
-    step = STEP_MEDIUM;
-  } else if (absError_W > 0.05f) {
-    step = STEP_SMALL;
-  } else {
-    step = STEP_TINY;
-  }
-
-  if (error_W > 0) {
-    setDACCode(dacCode + step);
-  } else {
-    setDACCode(dacCode - STEP_SMALL);
-  }
+  // Constant power control with relative-error based step size.
+  applyRelativePowerControl(effectivePowerTarget);
 }
 
 // -------------------------
@@ -737,12 +947,34 @@ void setup() {
   Serial.println("UNO R4 WiFi DAC CSV time-series load controller ready");
   Serial.println("DAC output on A0, clamped to 2.5 V max");
 
+  Serial.print("DAC max code: ");
+  Serial.print(DAC_MAX_CODE);
+  Serial.print(" | DAC max voltage: ");
+  Serial.print(dacVoltageFromCode(DAC_MAX_CODE), 4);
+  Serial.println(" V");
+
+  Serial.print("Startup DAC preload: ");
+  Serial.print(USE_DAC_START_PRELOAD ? "ON" : "OFF");
+  Serial.print(" | StartDAC=");
+  Serial.print(DAC_START_CODE);
+  Serial.print(" | Vdac=");
+  Serial.print(dacVoltageFromCode(DAC_START_CODE), 4);
+  Serial.println(" V");
+
+  Serial.print("Fast approach target: DAC=");
+  Serial.print(DAC_FAST_APPROACH_TARGET);
+  Serial.print(" | Vdac=");
+  Serial.print(dacVoltageFromCode(DAC_FAST_APPROACH_TARGET), 4);
+  Serial.print(" V");
+  Serial.print(" | FastStep=");
+  Serial.println(STEP_FAST);
+
   Serial.print("Loaded CSV profile points: ");
   Serial.println(profileLength);
 
   Serial.println("Each 15-minute profile point is played for 7.5 seconds.");
   Serial.println("One 96-point simulated day takes 12 minutes.");
-  Serial.println("Type 'start' to begin, 'stop' to disable, or 'help' for commands.");
+  Serial.println("Type 'start' to begin, 'restart' to restart, 'stop' to disable, or 'help' for commands.");
 
   printHelp();
 }
