@@ -12,7 +12,7 @@ DEFAULT_SUMMARY_PARAMETERS_PATH = APP_PYTHON_DIR / "data" / "summary_parameters.
 
 _PARAMETER_RE = re.compile(
     r"^\s*(?:[-*]\s*)?"
-    r"([A-Z][A-Z0-9_]+)"
+    r"([A-Za-z][A-Za-z0-9_.]*)"
     r"\s*=\s*"
     r"([-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?)"
 )
@@ -25,7 +25,7 @@ def load_summary_parameters(
     """Return all ``NAME = number`` entries found in ``summary_parameters.txt``.
 
     The summary file is intentionally readable prose. This parser only cares
-    about uppercase parameter assignments, so explanatory text can stay there.
+    about simple numeric assignments, so explanatory text can stay there.
     """
 
     parameter_path = Path(path)

@@ -52,7 +52,7 @@ App runtime control values:
 - PV_MIN_LOAD_SUPPLY_POWER_W = 0.100 W
 
 Critical interpretation:
-- Runtime scheduler limits are now collected in app/python/ems/ems_limits.py.
+- Runtime scheduler limits in app/python/ems/ems_limits.py are filled from this file.
 - The price threshold creates two economic modes: low below the threshold and high at or above it.
 - Demand is treated as a setpoint and compared directly with source discharge limits.
 - Keep demand in mW in the app configuration.
