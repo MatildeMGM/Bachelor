@@ -13,11 +13,8 @@ Updated notebooks in control_parameters_new:
 - summary_parameters.ipynb
 
 Main current values:
-- LOW_DEMAND_THRESHOLD_MILLIWATT = 43.31 mW
-- HIGH_DEMAND_THRESHOLD_MILLIWATT = 66.01 mW
 - MAX_DEMAND_MILLIWATT = 100.00 mW
-- LOW_PRICE_THRESHOLD_DKK_PER_KWH = 0.2857 DKK/kWh
-- HIGH_PRICE_THRESHOLD_DKK_PER_KWH = 0.8308 DKK/kWh
+- PRICE_LIMITS.high_price_min_DKK_per_kWh = 0.6231 DKK/kWh
 - EMS_BATTERY_CAPACITY_MILLIWATT_HOUR = 100.0 mWh
 - BATTERY_MAX_DISCHARGE_POWER_W = 0.100 W
 - PEM_MIN_USABLE_VOLTAGE = 0.54975 V
@@ -55,7 +52,9 @@ App runtime control values:
 - PV_MIN_LOAD_SUPPLY_POWER_W = 0.100 W
 
 Critical interpretation:
-- Demand thresholds are state thresholds, not physical min/max limits.
+- Runtime scheduler limits are now collected in app/python/ems/ems_limits.py.
+- The price threshold creates two economic modes: low below the threshold and high at or above it.
+- Demand is treated as a setpoint and compared directly with source discharge limits.
 - Keep demand in mW in the app configuration.
 - The battery is energy-scaled to 100 mWh for the EMS demo.
 - PEM cutoff and full-test hydrogen end reading are not the same endpoint.

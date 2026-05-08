@@ -43,10 +43,10 @@ function setButtonState(button, text, state, disabled = false) {
   if (state) button.classList.add(state);
 }
 
-function getPriceScheme(price) {
+function getPriceScheme(price, threshold) {
   const p = Number(price);
   if (!Number.isFinite(p)) return "Unknown";
-  return p >= 0.6 ? "High price scheme" : "Low price scheme";
+  return p >= Number(threshold || 0.6231) ? "High price mode" : "Low price mode";
 }
 
 function getScenarioLabel(mode) {
@@ -311,9 +311,12 @@ function renderAll(data) {
   const currentPrice = data.current_price;
   const mode = s.mode || "-";
   const scenario = getScenarioLabel(mode);
-  const priceScheme = decision.price_state
-    ? `${decision.price_state.charAt(0).toUpperCase()}${decision.price_state.slice(1)} price`
-    : getPriceScheme(currentPrice);
+  const priceMode = decision.price_mode;
+  const priceThreshold =
+    decision.price_threshold_dkk_kwh ?? scheduler.price_threshold_dkk_kwh ?? 0.6231;
+  const priceScheme = priceMode
+    ? `${priceMode.charAt(0).toUpperCase()}${priceMode.slice(1)} price mode`
+    : getPriceScheme(currentPrice, priceThreshold);
 
   setText("kpiTime", currentTime);
   setText("kpiInterval", currentInterval);

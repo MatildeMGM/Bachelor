@@ -2,8 +2,6 @@
 
 from zoneinfo import ZoneInfo
 
-from parameters import get_parameter
-
 DK_TZ = ZoneInfo("Europe/Copenhagen")
 
 PRICE_SOURCE = "api.energidataservice.dk"
@@ -20,14 +18,6 @@ LOOP_SLEEP_SECONDS = 2
 DEMO_DAY_SECONDS = 12 * 60
 DEMO_SLOT_SECONDS = DEMO_DAY_SECONDS / 96
 DEMO_ENABLED = True
-
-# Relative state thresholds used by the EMS scheduler.
-# The source values live in data/summary_parameters.txt.
-LOW_DEMAND_THRESHOLD_MILLIWATT = get_parameter("LOW_DEMAND_THRESHOLD_MILLIWATT", 43.31)
-HIGH_DEMAND_THRESHOLD_MILLIWATT = get_parameter("HIGH_DEMAND_THRESHOLD_MILLIWATT", 66.01)
-MAX_DEMAND_MILLIWATT = get_parameter("MAX_DEMAND_MILLIWATT", 100.0)
-LOW_PRICE_THRESHOLD_DKK_PER_KWH = get_parameter("LOW_PRICE_THRESHOLD_DKK_PER_KWH", 0.2857)
-HIGH_PRICE_THRESHOLD_DKK_PER_KWH = get_parameter("HIGH_PRICE_THRESHOLD_DKK_PER_KWH", 0.8308)
 
 LATITUDE = 55.686
 LONGITUDE = 12.101

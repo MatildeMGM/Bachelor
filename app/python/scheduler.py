@@ -1,621 +1,352 @@
 from __future__ import annotations
 
-"""Simple EMS scheduler for the accelerated daily load demonstration.
+"""Simple rule based EMS scheduler.
 
-Python decides the wanted scenario from price, demand and live measurements.
-The Arduino sketch still has the final safety check before switching relays.
+The scheduler only decides a target scenario. The Arduino sketch performs the
+final safety check before changing relay states.
 """
 
-from dataclasses import dataclass
+import csv
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-import numpy as np
-import pandas as pd
-
-from config import (
-    HIGH_DEMAND_THRESHOLD_MILLIWATT,
-    HIGH_PRICE_THRESHOLD_DKK_PER_KWH,
-    LOW_DEMAND_THRESHOLD_MILLIWATT,
-    LOW_PRICE_THRESHOLD_DKK_PER_KWH,
-    MAX_DEMAND_MILLIWATT,
-)
-from parameters import DEFAULT_SUMMARY_PARAMETERS_PATH, get_parameter, load_summary_parameters
+from ems.ems_limits import DEFAULT_LIMITS, EMSLimits
 
 
 APP_PYTHON_DIR = Path(__file__).resolve().parent
-APP_DATA_DIR = APP_PYTHON_DIR / "data"
 DEMAND_PROFILE_PATH = (
-    Path(__file__).resolve().parent
+    APP_PYTHON_DIR
     / "data"
     / "variable_load_signal"
     / "scaled_may_power_profile_15min.csv"
 )
-MIN_DEMAND_POWER_MW = get_parameter("MIN_DEMAND_POWER_MILLIWATT", 20.0)
-
 
 SCENARIO_DESCRIPTIONS = {
-    1: "Load from grid. PV, battery and PEM are isolated.",
-    2: "Load from grid. PV charges battery.",
-    3: "Load from grid. PV charges PEM.",
-    4: "Load from PV. Battery and PEM are isolated.",
-    5: "Load from battery. PV and PEM are isolated.",
-    6: "Load from PEM. PV and battery are isolated.",
+    1: "Grid supplies load.",
+    2: "PV charges battery while grid supplies load.",
+    3: "PV charges PEM while grid supplies load.",
+    4: "PV supplies load.",
+    5: "Battery supplies load.",
+    6: "PEM supplies load.",
 }
 
 
 @dataclass(frozen=True)
-class BatteryLimits:
-    min_voltage_v: float
-    full_voltage_v: float
-    empty_test_voltage_v: float
-    full_test_voltage_v: float
-    usable_energy_wh: float
-    max_discharge_power_w: float
-    low_soc_percent: float
-    medium_soc_percent: float
-    high_soc_percent: float
-    reserve_soc_percent: float = 20.0
-    full_soc_percent: float = 90.0
+class SchedulerConfig:
+    """Small compatibility object for the existing bridge command builder."""
 
+    safety_margin_mW: float = DEFAULT_LIMITS.safety.safety_margin_mW
 
-@dataclass(frozen=True)
-class PEMLimits:
-    min_voltage_v: float
-    minimum_electrolysis_power_w: float
-    min_hydrogen_ml: float
-    max_discharge_power_w: float
-    full_hydrogen_ml: float
-    medium_hydrogen_ml: float
-    high_hydrogen_ml: float
-    hydrogen_production_mL_per_input_j: float
-    hydrogen_consumption_mL_per_output_j: float
-    useful_output_duration_s: float
-    useful_output_energy_j: float
-    hydrogen_for_useful_output_ml: float
-    charge_energy_for_useful_output_j: float
-    startup_delay_s: float
-
-
-@dataclass(frozen=True)
-class PVLimits:
-    min_battery_charging_voltage_v: float
-    min_pem_charging_voltage_v: float
-    min_load_supply_voltage_v: float
-    min_battery_charging_power_w: float
-    min_pem_charging_power_w: float
-    min_load_supply_power_w: float
-    max_power_w: float
-    medium_power_w: float
-    high_power_w: float
-
-
-@dataclass(frozen=True)
-class EMSLimits:
-    battery: BatteryLimits
-    pem: PEMLimits
-    pv: PVLimits
-
-
-@dataclass(frozen=True)
-class EMSInputStates:
-    price: str
-    demand: str
-    pv: str
-    battery: str
-    pem: str
+    @property
+    def safety_margin_w(self) -> float:
+        return self.safety_margin_mW / 1000.0
 
 
 @dataclass
 class ComponentState:
-    battery_soc_percent: float = 50.0
-    battery_voltage_v: float = 0.0
-    battery_energy_wh: float | None = None
-    pem_hydrogen_ml: float = 0.0
-    pem_voltage_v: float = 0.0
-    pv_voltage_v: float = 0.0
-    pv_current_a: float = 0.0
-    pv_power_w: float | None = None
-    last_scenario: int = 1
-    seconds_since_last_switch: float = 9999.0
+    pv_voltage_V: float = 0.0
+    pv_current_mA: float = 0.0
+    battery_voltage_V: float = 0.0
+    battery_current_mA: float = 0.0
+    pem_voltage_V: float = 0.0
+    pem_current_mA: float = 0.0
+    load_voltage_V: float = 0.0
+    load_current_mA: float = 0.0
+    battery_soc_percent: float | None = None
+
+    pv_power_mW: float = 0.0
+    battery_power_mW: float = 0.0
+    pem_power_mW: float = 0.0
+    load_power_mW: float = 0.0
+
+    pv_available: bool = False
+    battery_can_discharge: bool = False
+    battery_can_charge: bool = False
+    pem_can_discharge: bool = False
+    pem_can_charge: bool = False
+    load_demand_mW: float = 0.0
+
+    # These are convenience checks used by the scenario functions.
+    pv_can_supply_load: bool = False
+    pv_can_charge: bool = False
 
 
-@dataclass(frozen=True)
-class SchedulerConfig:
-    simulated_slot_hours: float = 0.25
-    price_low_quantile: float = 0.35
-    price_high_quantile: float = 0.70
-    lookahead_slots: int = 96
-    safety_margin_w: float = get_parameter("SAFETY_MARGIN_W", 0.005)
-    min_switch_seconds: float = get_parameter("MIN_SWITCH_SECONDS", 2.0)
+def load_limits() -> EMSLimits:
+    """Return the editable EMS limits used by the rule based scheduler."""
+
+    return DEFAULT_LIMITS
 
 
-def load_limits(data_dir: Path | str = APP_DATA_DIR) -> EMSLimits:
-    """Load operating limits from the app's packaged summary file."""
+def load_demand_profile(path: str | Path = DEMAND_PROFILE_PATH) -> list[float]:
+    """Load 96 demand values in mW from the scaled demand profile CSV."""
 
-    summary_path = Path(data_dir) / "summary_parameters.txt"
-    if not summary_path.exists():
-        summary_path = DEFAULT_SUMMARY_PARAMETERS_PATH
+    demand_path = Path(path)
+    values: list[float] = []
 
-    params = load_summary_parameters(summary_path)
+    with demand_path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        if "power_mW" not in (reader.fieldnames or []):
+            raise ValueError("Demand profile must contain a power_mW column.")
 
-    def p(name: str, default: float) -> float:
-        return float(params.get(name, default))
+        for row in reader:
+            values.append(float(row["power_mW"]))
 
-    max_demand_w = p("MAX_DEMAND_MILLIWATT", MAX_DEMAND_MILLIWATT) / 1000.0
-    battery_capacity_wh = p("EMS_BATTERY_CAPACITY_MILLIWATT_HOUR", 100.0) / 1000.0
-    battery_min_voltage_v = p("BATTERY_MIN_VOLTAGE", 3.0)
-    battery_full_voltage_v = p("BATTERY_FULL_VOLTAGE", p("BATTERY_MAX_VOLTAGE", 4.2))
-    battery_empty_test_voltage_v = p("BATTERY_EMPTY_TEST_VOLTAGE", battery_min_voltage_v)
-    battery_full_test_voltage_v = p("BATTERY_FULL_TEST_VOLTAGE", 3.97)
-    battery_low_soc_percent = p("BATTERY_LOW_SOC_PERCENT", 10.0)
-    battery_medium_soc_percent = p("BATTERY_MEDIUM_SOC_PERCENT", 40.0)
-    battery_high_soc_percent = p("BATTERY_HIGH_SOC_PERCENT", 60.0)
-    battery_reserve_soc_percent = p("BATTERY_RESERVE_SOC_PERCENT", 20.0)
-    battery_full_soc_percent = p("BATTERY_FULL_SOC_PERCENT", 90.0)
+    if len(values) != 96:
+        raise ValueError(f"Demand profile must contain 96 values, got {len(values)}.")
 
-    pem_full_hydrogen = p("MEASURED_FULL_HYDROGEN_CAPACITY_ML", 0.0)
-    pem_hydrogen_for_useful_output = p("PEM_HYDROGEN_FOR_USEFUL_OUTPUT_ML", 0.0)
-    pem_medium_hydrogen = p("PEM_MEDIUM_HYDROGEN_ML", 0.35 * pem_full_hydrogen)
-    pem_high_hydrogen = p("PEM_HIGH_HYDROGEN_ML", 0.65 * pem_full_hydrogen)
+    return values
 
-    pv_max_power_w = p("PV_MAX_POWER_W", 0.0)
-    pv_load_voltage_v = p("PV_MIN_LOAD_SUPPLY_VOLTAGE", 4.2812)
-    pv_load_power_w = p("PV_MIN_LOAD_SUPPLY_POWER_W", max_demand_w)
-    pv_battery_charging_power_w = p("PV_MIN_BATTERY_CHARGING_POWER_W", 0.020)
-    pv_pem_charging_power_w = p("PV_MIN_PEM_CHARGING_POWER_W", 0.020)
 
-    return EMSLimits(
-        battery=BatteryLimits(
-            min_voltage_v=battery_min_voltage_v,
-            full_voltage_v=battery_full_voltage_v,
-            empty_test_voltage_v=battery_empty_test_voltage_v,
-            full_test_voltage_v=battery_full_test_voltage_v,
-            usable_energy_wh=battery_capacity_wh,
-            max_discharge_power_w=p("BATTERY_MAX_DISCHARGE_POWER_W", max_demand_w),
-            low_soc_percent=battery_low_soc_percent,
-            medium_soc_percent=battery_medium_soc_percent,
-            high_soc_percent=battery_high_soc_percent,
-            reserve_soc_percent=battery_reserve_soc_percent,
-            full_soc_percent=battery_full_soc_percent,
-        ),
-        pem=PEMLimits(
-            min_voltage_v=p("PEM_MIN_USABLE_VOLTAGE", 0.54975),
-            minimum_electrolysis_power_w=p(
-                "PEM_MIN_ELECTROLYSIS_POWER_W",
-                pv_pem_charging_power_w,
-            ),
-            min_hydrogen_ml=p("PEM_MIN_HYDROGEN_ML", pem_hydrogen_for_useful_output),
-            max_discharge_power_w=p("PEM_MAX_DISCHARGE_POWER_W", 0.03195),
-            full_hydrogen_ml=pem_full_hydrogen,
-            medium_hydrogen_ml=pem_medium_hydrogen,
-            high_hydrogen_ml=pem_high_hydrogen,
-            hydrogen_production_mL_per_input_j=p("HYDROGEN_PRODUCTION_ML_PER_INPUT_J", 0.0),
-            hydrogen_consumption_mL_per_output_j=p(
-                "HYDROGEN_CONSUMPTION_ML_PER_OUTPUT_J",
-                0.0,
-            ),
-            useful_output_duration_s=p("USEFUL_PEM_OUTPUT_DURATION_S", 60.0),
-            useful_output_energy_j=p("PEM_USEFUL_OUTPUT_ENERGY_J", 0.0),
-            hydrogen_for_useful_output_ml=pem_hydrogen_for_useful_output,
-            charge_energy_for_useful_output_j=p("PEM_CHARGE_ENERGY_FOR_USEFUL_OUTPUT_J", 0.0),
-            startup_delay_s=p("PEM_STARTUP_DELAY_S", get_parameter("MIN_SWITCH_SECONDS", 2.0)),
-        ),
-        pv=PVLimits(
-            min_battery_charging_voltage_v=p(
-                "PV_MIN_BATTERY_CHARGING_VOLTAGE",
-                pv_load_voltage_v,
-            ),
-            min_pem_charging_voltage_v=p("PV_MIN_PEM_CHARGING_VOLTAGE", pv_load_voltage_v),
-            min_load_supply_voltage_v=pv_load_voltage_v,
-            min_battery_charging_power_w=pv_battery_charging_power_w,
-            min_pem_charging_power_w=pv_pem_charging_power_w,
-            min_load_supply_power_w=pv_load_power_w,
-            max_power_w=pv_max_power_w,
-            medium_power_w=p("PV_MEDIUM_POWER_W", pv_pem_charging_power_w),
-            high_power_w=p("PV_HIGH_POWER_W", pv_load_power_w),
-        ),
+def load_scaled_demand_profile(path: str | Path = DEMAND_PROFILE_PATH) -> list[float]:
+    """Existing app helper: load demand values and convert mW to W."""
+
+    return [value_mW / 1000.0 for value_mW in load_demand_profile(path)]
+
+
+def get_current_slot(now: datetime | None = None) -> int:
+    """Return the current 15 minute slot, from 0 to 95."""
+
+    current = now or datetime.now()
+    return current.hour * 4 + current.minute // 15
+
+
+def classify_price(price_DKK_per_kWh: float, limits: EMSLimits) -> str:
+    """Return high or low from one price threshold."""
+
+    if price_DKK_per_kWh >= limits.price.high_price_min_DKK_per_kWh:
+        return "high"
+    return "low"
+
+
+def build_component_state(
+    status: dict | ComponentState,
+    demand_mW: float,
+    limits: EMSLimits,
+) -> ComponentState:
+    """Convert Arduino status values into simple measured component state."""
+
+    if isinstance(status, ComponentState):
+        status = asdict(status)
+
+    pv_voltage = _value(status, ["pv_voltage_V", "panelVoltage", "pvVoltage"])
+    pv_current = _current_mA(status, ["pv_current_mA"], ["PVcurrent", "pv_current_A"])
+    battery_voltage = _value(status, ["battery_voltage_V", "batteryVoltage"])
+    battery_current = _current_mA(
+        status,
+        ["battery_current_mA"],
+        ["Batcurrent", "battery_current_A"],
+    )
+    pem_voltage = _value(status, ["pem_voltage_V", "pemrfcVoltage", "pemVoltage"])
+    pem_current = _current_mA(status, ["pem_current_mA"], ["PEMcurrent", "pem_current_A"])
+    load_voltage = _value(status, ["load_voltage_V", "loadVoltage"])
+    load_current = _current_mA(status, ["load_current_mA"], ["Loadcurrent", "load_current_A"])
+
+    pv_power = _power_mW(status, ["pv_power_mW"], ["PVpower"], pv_voltage, pv_current)
+    battery_power = _power_mW(
+        status,
+        ["battery_power_mW"],
+        ["Batterypower"],
+        battery_voltage,
+        battery_current,
+    )
+    pem_power = _power_mW(status, ["pem_power_mW"], ["PEMpower"], pem_voltage, pem_current)
+    load_power = _power_mW(status, ["load_power_mW"], ["Loadpower"], load_voltage, load_current)
+
+    battery_soc = _optional_value(status, ["batterySOC", "battery_soc_percent"])
+
+    pv_available = (
+        pv_voltage >= limits.pv.min_voltage_for_use_V
+        and pv_current >= limits.pv.min_current_out_mA
+    )
+
+    # PV current and power can be close to zero when the panel is open-circuit.
+    # The scheduler therefore uses voltage and characterised power limits for
+    # pre-selection. Arduino validates loaded PV power after switching.
+    pv_can_supply_load = (
+        pv_available
+        and demand_mW <= limits.pv.min_power_for_load_mW
+    )
+    pv_can_charge = pv_available
+
+    battery_can_discharge = (
+        battery_voltage >= limits.battery.min_voltage_discharge_V
+        and demand_mW <= limits.battery.min_power_for_load_mW
+        and _soc_above_low_limit(battery_soc, limits)
+    )
+    battery_can_charge = (
+        battery_voltage < limits.battery.max_voltage_charge_V
+        and abs(battery_current) <= limits.battery.max_charge_current_mA
+        and _soc_below_full_limit(battery_soc, limits)
+    )
+
+    pem_can_discharge = (
+        pem_voltage >= limits.pem.min_voltage_discharge_V
+        and demand_mW <= limits.pem.min_power_for_load_mW
+    )
+    pem_can_charge = (
+        pem_voltage < limits.pem.max_voltage_charge_V
+        and abs(pem_current) <= limits.pem.max_charge_current_mA
+    )
+
+    return ComponentState(
+        pv_voltage_V=pv_voltage,
+        pv_current_mA=pv_current,
+        battery_voltage_V=battery_voltage,
+        battery_current_mA=battery_current,
+        pem_voltage_V=pem_voltage,
+        pem_current_mA=pem_current,
+        load_voltage_V=load_voltage,
+        load_current_mA=load_current,
+        battery_soc_percent=battery_soc,
+        pv_power_mW=pv_power,
+        battery_power_mW=battery_power,
+        pem_power_mW=pem_power,
+        load_power_mW=load_power,
+        pv_available=pv_available,
+        battery_can_discharge=battery_can_discharge,
+        battery_can_charge=battery_can_charge,
+        pem_can_discharge=pem_can_discharge,
+        pem_can_charge=pem_can_charge,
+        load_demand_mW=demand_mW,
+        pv_can_supply_load=pv_can_supply_load,
+        pv_can_charge=pv_can_charge,
     )
 
 
-def load_scaled_demand_profile(path: Path | str = DEMAND_PROFILE_PATH) -> list[float]:
-    """Load the 96 slot demand profile and convert mW to W."""
+def is_s4_eligible(state: ComponentState) -> bool:
+    """S4 is eligible when PV can supply the current demand."""
 
-    df = pd.read_csv(path)
-    if "power_mW" not in df.columns:
-        raise ValueError("Demand profile must contain a power_mW column.")
+    return state.pv_can_supply_load
 
-    demand_mw = df["power_mW"].astype(float).clip(lower=MIN_DEMAND_POWER_MW)
-    return (demand_mw / 1000.0).tolist()
+
+def is_s5_eligible(state: ComponentState) -> bool:
+    """S5 is eligible when the battery can supply the current demand."""
+
+    return state.battery_can_discharge
+
+
+def is_s6_eligible(state: ComponentState) -> bool:
+    """S6 is eligible when the PEM can supply the current demand."""
+
+    return state.pem_can_discharge
+
+
+def is_s2_eligible(state: ComponentState) -> bool:
+    """S2 is eligible when PV can charge the battery while grid supplies load."""
+
+    return state.pv_can_charge and state.battery_can_charge
+
+
+def is_s3_eligible(state: ComponentState) -> bool:
+    """S3 is eligible when PV can charge the PEM while grid supplies load."""
+
+    return state.pv_can_charge and state.pem_can_charge
 
 
 def decide_current_scenario(
+    price: float,
+    demand_mW: float,
+    status: dict | ComponentState,
+    limits: EMSLimits | None = None,
+) -> str:
+    """Choose S1-S6 using the required high/low price priority rules."""
+
+    limits = limits or load_limits()
+    price_mode = classify_price(price, limits)
+    state = build_component_state(status, demand_mW, limits)
+
+    if price_mode == "high":
+        if is_s4_eligible(state):
+            return "S4"
+        if is_s5_eligible(state):
+            return "S5"
+        if is_s6_eligible(state):
+            return "S6"
+        return "S1"
+
+    if is_s2_eligible(state):
+        return "S2"
+    if is_s3_eligible(state):
+        return "S3"
+    if is_s4_eligible(state):
+        return "S4"
+    return "S1"
+
+
+def decide_slot_scenario(
+    *,
     prices: Iterable[float],
     demand_profile: Iterable[float],
     current_slot: int,
-    component_state: ComponentState,
+    status: dict,
     limits: EMSLimits | None = None,
     config: SchedulerConfig | None = None,
 ) -> dict:
-    """Choose the scenario for the current accelerated demo slot."""
+    """App-facing wrapper that returns telemetry and the Arduino command."""
 
     limits = limits or load_limits()
     config = config or SchedulerConfig()
-
     prices_96 = _as_96_values(prices, "prices")
-    demand_96 = _as_96_values(demand_profile, "demand_profile")
+    demand_96_w = _as_96_values(demand_profile, "demand_profile")
 
-    price_now = prices_96[current_slot]
-    demand_now_w = demand_96[current_slot]
-    pv_now_w = estimate_live_pv_power_w(component_state, limits)
-    pv_voltage_v = max(0.0, component_state.pv_voltage_v)
-
-    # The battery reserve is based on upcoming expensive demand.
-    reserve_soc = calculate_battery_reserve_soc(
-        prices_96=prices_96,
-        demand_96=demand_96,
-        current_slot=current_slot,
-        limits=limits,
-        config=config,
-    )
-    input_states = classify_inputs(
-        price_now=price_now,
-        prices_96=prices_96,
-        demand_now_w=demand_now_w,
-        demand_96=demand_96,
-        pv_voltage_v=pv_voltage_v,
-        reserve_soc_percent=reserve_soc,
-        component_state=component_state,
-        limits=limits,
-        config=config,
-    )
-
-    eligible = get_eligible_scenarios(
-        demand_w=demand_now_w,
-        pv_voltage_v=pv_voltage_v,
-        reserve_soc_percent=reserve_soc,
-        component_state=component_state,
-        limits=limits,
-        config=config,
-    )
-    scenario, reason = choose_best_scenario(eligible, input_states)
-
-    required_switch_delay_s = get_required_switch_delay_s(
-        current_scenario=component_state.last_scenario,
-        next_scenario=scenario,
-        limits=limits,
-        config=config,
-    )
-    if (
-        scenario != component_state.last_scenario
-        and component_state.seconds_since_last_switch < required_switch_delay_s
-    ):
-        scenario = 1
-        reason = "minimum switching time, safe grid fallback"
+    price = prices_96[current_slot]
+    demand_mW = demand_96_w[current_slot] * 1000.0
+    state = build_component_state(status, demand_mW, limits)
+    scenario_label = decide_current_scenario(price, demand_mW, state, limits)
+    scenario = int(scenario_label[1:])
+    price_mode = classify_price(price, limits)
 
     return {
         "slot": current_slot,
-        "price": price_now,
-        "price_state": input_states.price,
-        "demand_state": input_states.demand,
-        "pv_state": input_states.pv,
-        "battery_state": input_states.battery,
-        "pem_state": input_states.pem,
-        "input_states": {
-            "price": input_states.price,
-            "demand": input_states.demand,
-            "pv": input_states.pv,
-            "battery": input_states.battery,
-            "pem": input_states.pem,
+        "price": price,
+        "price_mode": price_mode,
+        "price_threshold_dkk_kwh": limits.price.high_price_min_DKK_per_kWh,
+        "demand_w": demand_mW / 1000.0,
+        "demand_mW": demand_mW,
+        "component_state": asdict(state),
+        "threshold_checks": {
+            "pv_can_charge_battery": is_s2_eligible(state),
+            "pv_can_charge_pem": is_s3_eligible(state),
+            "pv_can_supply_load": is_s4_eligible(state),
+            "battery_can_supply_load": is_s5_eligible(state),
+            "pem_can_supply_load": is_s6_eligible(state),
         },
-        "demand_w": demand_now_w,
-        "live_pv_w": pv_now_w,
-        "battery_reserve_soc_percent": reserve_soc,
-        "pem_hydrogen_est_ml": component_state.pem_hydrogen_ml,
-        "eligible_scenarios": sorted(eligible),
+        "eligible_scenarios": _eligible_scenarios(state),
         "scenario": scenario,
-        "scenario_label": f"S{scenario}",
+        "scenario_label": scenario_label,
         "scenario_description": SCENARIO_DESCRIPTIONS[scenario],
-        "reason": reason,
+        "reason": _scenario_reason(scenario_label, price_mode),
+        "live_pv_w": state.pv_power_mW / 1000.0,
         "command": build_scenario_command(
             current_slot,
             scenario,
-            demand_now_w,
+            demand_mW,
             limits,
             config,
         ),
     }
 
 
-def estimate_live_pv_power_w(
-    component_state: ComponentState,
-    limits: EMSLimits | None = None,
-) -> float:
-    """Estimate usable PV power from the live INA226 measurement."""
-
-    limits = limits or load_limits()
-
-    if not _threshold_reached(
-        component_state.pv_voltage_v,
-        limits.pv.min_load_supply_voltage_v,
-    ):
-        return 0.0
-
-    if component_state.pv_power_w is not None:
-        pv_w = component_state.pv_power_w
-    else:
-        pv_w = component_state.pv_voltage_v * component_state.pv_current_a
-
-    return float(np.clip(pv_w, 0.0, limits.pv.max_power_w))
-
-
-def classify_price(
-    price: float,
-    prices_96: list[float],
-    config: SchedulerConfig,
-) -> str:
-    """Classify the current price using the configured price thresholds."""
-
-    low = LOW_PRICE_THRESHOLD_DKK_PER_KWH
-    high = HIGH_PRICE_THRESHOLD_DKK_PER_KWH
-
-    if np.isclose(low, high):
-        return "medium"
-    if price >= high:
-        return "high"
-    if price <= low:
-        return "low"
-    return "medium"
-
-
-def classify_inputs(
-    *,
-    price_now: float,
-    prices_96: list[float],
-    demand_now_w: float,
-    demand_96: list[float],
-    pv_voltage_v: float,
-    reserve_soc_percent: float,
-    component_state: ComponentState,
-    limits: EMSLimits,
-    config: SchedulerConfig,
-) -> EMSInputStates:
-    """Convert all scheduler inputs into the same low/medium/high language."""
-
-    return EMSInputStates(
-        price=classify_price(price_now, prices_96, config),
-        demand=classify_demand(demand_now_w, demand_96),
-        pv=classify_pv(pv_voltage_v, demand_now_w, limits, config),
-        battery=classify_battery(component_state, reserve_soc_percent, limits),
-        pem=classify_pem(component_state, limits),
-    )
-
-
-def classify_demand(demand_w: float, demand_96: list[float]) -> str:
-    """Classify demand using the configured demand thresholds."""
-
-    low = LOW_DEMAND_THRESHOLD_MILLIWATT / 1000.0
-    high = HIGH_DEMAND_THRESHOLD_MILLIWATT / 1000.0
-    return _low_medium_high(demand_w, low, high)
-
-
-def classify_pv(
-    pv_voltage_v: float,
-    demand_w: float,
-    limits: EMSLimits,
-    config: SchedulerConfig,
-) -> str:
-    """Classify PV availability from corrected open-circuit voltage.
-
-    PV power is only meaningful after PV is connected to a load, battery or PEM.
-    The scheduler therefore uses voltage as the pre-check and lets Arduino
-    validate loaded PV power after switching.
-    """
-
-    if _threshold_reached(pv_voltage_v, limits.pv.min_load_supply_voltage_v):
-        return "high"
-    if (
-        _threshold_reached(pv_voltage_v, limits.pv.min_battery_charging_voltage_v)
-        or _threshold_reached(pv_voltage_v, limits.pv.min_pem_charging_voltage_v)
-    ):
-        return "medium"
-    return "low"
-
-
-def classify_battery(
-    component_state: ComponentState,
-    reserve_soc_percent: float,
-    limits: EMSLimits,
-) -> str:
-    """Classify battery availability while keeping the reserve as low state."""
-
-    if (
-        component_state.battery_voltage_v < limits.battery.min_voltage_v
-        or component_state.battery_soc_percent <= reserve_soc_percent
-    ):
-        return "low"
-
-    if component_state.battery_soc_percent >= limits.battery.high_soc_percent:
-        return "high"
-    return "medium"
-
-
-def classify_pem(component_state: ComponentState, limits: EMSLimits) -> str:
-    """Classify estimated PEM hydrogen availability."""
-
-    if (
-        component_state.pem_voltage_v < limits.pem.min_voltage_v
-        or component_state.pem_hydrogen_ml < limits.pem.min_hydrogen_ml
-    ):
-        return "low"
-
-    if component_state.pem_hydrogen_ml >= limits.pem.high_hydrogen_ml:
-        return "high"
-    return "medium"
-
-
-def _low_medium_high(value: float, low_limit: float, high_limit: float) -> str:
-    if np.isclose(low_limit, high_limit):
-        return "medium"
-    if value <= low_limit:
-        return "low"
-    if value >= high_limit:
-        return "high"
-    return "medium"
-
-
-def calculate_battery_reserve_soc(
-    *,
-    prices_96: list[float],
-    demand_96: list[float],
-    current_slot: int,
-    limits: EMSLimits,
-    config: SchedulerConfig,
-) -> float:
-    """Reserve battery energy for expensive slots later in the demo day."""
-
-    high_price = float(np.quantile(prices_96, config.price_high_quantile))
-    end_slot = min(96, current_slot + config.lookahead_slots + 1)
-
-    future_expensive_load_wh = 0.0
-    for slot in range(current_slot + 1, end_slot):
-        if prices_96[slot] >= high_price:
-            future_expensive_load_wh += demand_96[slot] * config.simulated_slot_hours
-
-    usable_energy_wh = max(limits.battery.usable_energy_wh, 0.001)
-    reserve_from_lookahead = 100.0 * future_expensive_load_wh / usable_energy_wh
-
-    return float(
-        np.clip(
-            max(limits.battery.reserve_soc_percent, reserve_from_lookahead),
-            limits.battery.reserve_soc_percent,
-            limits.battery.full_soc_percent,
-        )
-    )
-
-
-def get_eligible_scenarios(
-    *,
-    demand_w: float,
-    pv_voltage_v: float,
-    reserve_soc_percent: float,
-    component_state: ComponentState,
-    limits: EMSLimits,
-    config: SchedulerConfig,
-) -> set[int]:
-    """Find the scenarios that are allowed by the measured component limits."""
-
-    eligible = {1}
-
-    # Open-circuit PV voltage can be measured while PV is disconnected, but
-    # open-circuit PV power cannot represent available power. Loaded power is
-    # validated by Arduino after switching the relay scenario.
-    pv_can_feed_load = _threshold_reached(pv_voltage_v, limits.pv.min_load_supply_voltage_v)
-    pv_can_charge_battery = _threshold_reached(
-        pv_voltage_v,
-        limits.pv.min_battery_charging_voltage_v,
-    )
-    pv_can_charge_pem = _threshold_reached(pv_voltage_v, limits.pv.min_pem_charging_voltage_v)
-
-    if pv_can_feed_load:
-        eligible.add(4)
-
-    if (
-        pv_can_charge_battery
-        and component_state.battery_soc_percent < limits.battery.full_soc_percent
-    ):
-        eligible.add(2)
-
-    if pv_can_charge_pem and component_state.pem_hydrogen_ml < limits.pem.full_hydrogen_ml:
-        eligible.add(3)
-
-    battery_can_discharge = (
-        component_state.battery_voltage_v >= limits.battery.min_voltage_v
-        and component_state.battery_soc_percent > reserve_soc_percent
-        and demand_w <= limits.battery.max_discharge_power_w + config.safety_margin_w
-    )
-    if battery_can_discharge:
-        eligible.add(5)
-
-    pem_can_discharge = (
-        component_state.pem_voltage_v >= limits.pem.min_voltage_v
-        and component_state.pem_hydrogen_ml >= limits.pem.min_hydrogen_ml
-        and demand_w <= limits.pem.max_discharge_power_w
-    )
-    if pem_can_discharge:
-        eligible.add(6)
-
-    return eligible
-
-
-def choose_best_scenario(
-    eligible: set[int],
-    input_states: EMSInputStates,
-) -> tuple[int, str]:
-    """Choose one scenario from the safe candidates."""
-
-    if input_states.price == "high":
-        priority = [
-            (4, "high price, PV available: use live PV for the load"),
-            (5, "high price, battery available: discharge battery"),
-            (6, "high price, PEM available: use PEM for small load"),
-            (1, "high price, local sources low: safe grid fallback"),
-        ]
-    elif input_states.price == "low":
-        priority = [
-            (2, "low price, PV available: grid supplies load while PV charges battery"),
-            (3, "low price, battery not charging: PV charges PEM"),
-            (4, "low price, PV available: PV can cover load directly"),
-            (1, "low price: safe grid fallback"),
-        ]
-    else:
-        priority = [
-            (4, "medium price, PV available: use PV directly"),
-            (1, "medium price: save stored energy"),
-        ]
-
-    for scenario, reason in priority:
-        if scenario in eligible:
-            return scenario, reason
-
-    return 1, "no safe local scenario, grid fallback"
-
-
-def get_required_switch_delay_s(
-    *,
-    current_scenario: int,
-    next_scenario: int,
-    limits: EMSLimits,
-    config: SchedulerConfig,
-) -> float:
-    delay_s = config.min_switch_seconds
-
-    if 6 in {current_scenario, next_scenario}:
-        delay_s = max(delay_s, limits.pem.startup_delay_s)
-
-    return float(delay_s)
-
-
 def build_scenario_command(
     slot: int,
     scenario: int,
-    demand_w: float,
+    demand_mW: float,
     limits: EMSLimits,
     config: SchedulerConfig,
 ) -> str:
     """Command frame sent from Python to the Arduino sketch."""
 
-    demand_mw = int(round(demand_w * 1000.0))
-    safety_margin_mw = int(round(config.safety_margin_w * 1000.0))
     return (
-        f"SCENARIO,{int(slot)},{int(scenario)},{demand_mw},"
-        f"{_command_voltage_threshold(limits.pv.min_battery_charging_voltage_v):.5f},"
-        f"{_command_power_mw(limits.pv.min_battery_charging_power_w):.1f},"
-        f"{_command_voltage_threshold(limits.pv.min_pem_charging_voltage_v):.5f},"
-        f"{_command_power_mw(limits.pv.min_pem_charging_power_w):.1f},"
-        f"{_command_voltage_threshold(limits.pv.min_load_supply_voltage_v):.5f},"
-        f"{_command_power_mw(limits.pv.min_load_supply_power_w):.1f},"
-        f"{safety_margin_mw}"
+        f"SCENARIO,{int(slot)},{int(scenario)},{int(round(demand_mW))},"
+        f"{limits.pv.min_voltage_for_use_V:.5f},"
+        f"{limits.pv.min_power_for_charging_mW:.1f},"
+        f"{limits.pv.min_voltage_for_use_V:.5f},"
+        f"{limits.pv.min_power_for_charging_mW:.1f},"
+        f"{limits.pv.min_voltage_for_use_V:.5f},"
+        f"{limits.pv.min_power_for_load_mW:.1f},"
+        f"{config.safety_margin_mW:.1f}"
     )
 
 
@@ -624,45 +355,139 @@ def build_config_command(limits: EMSLimits, config: SchedulerConfig) -> str:
 
     return (
         "CONFIG,"
-        f"{limits.battery.min_voltage_v:.5f},"
-        f"{limits.battery.full_voltage_v:.5f},"
-        f"{limits.battery.empty_test_voltage_v:.5f},"
-        f"{limits.battery.full_test_voltage_v:.5f},"
-        f"{limits.battery.usable_energy_wh * 1000.0:.3f},"
+        f"{limits.battery.min_voltage_discharge_V:.5f},"
+        f"{limits.battery.max_voltage_charge_V:.5f},"
+        f"{limits.battery.min_voltage_discharge_V:.5f},"
+        f"{limits.battery.max_voltage_charge_V:.5f},"
+        f"{limits.battery.usable_energy_Wh * 1000.0:.3f},"
         f"{limits.battery.low_soc_percent:.2f},"
         f"{limits.battery.full_soc_percent:.2f},"
-        f"{_command_power_mw(limits.battery.max_discharge_power_w):.3f},"
-        f"{limits.pem.min_voltage_v:.5f},"
-        f"{_command_power_mw(limits.pem.max_discharge_power_w):.3f},"
-        f"{_command_power_mw(config.safety_margin_w):.3f}"
+        f"{limits.battery.min_power_for_load_mW:.3f},"
+        f"{limits.pem.min_voltage_discharge_V:.5f},"
+        f"{limits.pem.min_power_for_load_mW:.3f},"
+        f"{config.safety_margin_mW:.3f}"
     )
 
 
+def run_demo() -> None:
+    """Small scheduler demo that does not require Arduino hardware."""
+
+    limits = load_limits()
+    slot = get_current_slot()
+    prices = [0.25] * 96
+    prices[slot] = 1.00
+    demand = load_demand_profile()
+    status = {
+        "pv_voltage_V": 5.0,
+        "pv_current_mA": 20.0,
+        "battery_voltage_V": 3.8,
+        "battery_current_mA": 0.0,
+        "pem_voltage_V": 0.8,
+        "pem_current_mA": 0.0,
+        "load_voltage_V": 5.0,
+        "load_current_mA": 10.0,
+        "batterySOC": 70.0,
+    }
+
+    price = prices[slot]
+    demand_mW = demand[slot]
+    state = build_component_state(status, demand_mW, limits)
+    scenario = decide_current_scenario(price, demand_mW, state, limits)
+
+    print("slot:", slot)
+    print("price:", price)
+    print("demand_mW:", round(demand_mW, 2))
+    print("component_state:", asdict(state))
+    print("chosen_scenario:", scenario)
+
+
+def _eligible_scenarios(state: ComponentState) -> list[int]:
+    eligible = [1]
+    if is_s2_eligible(state):
+        eligible.append(2)
+    if is_s3_eligible(state):
+        eligible.append(3)
+    if is_s4_eligible(state):
+        eligible.append(4)
+    if is_s5_eligible(state):
+        eligible.append(5)
+    if is_s6_eligible(state):
+        eligible.append(6)
+    return eligible
+
+
+def _scenario_reason(scenario: str, price_mode: str) -> str:
+    reasons = {
+        "S1": f"{price_mode} price: no higher-priority eligible source, use grid fallback",
+        "S2": "low price, PV and battery charging path eligible",
+        "S3": "low price, PV and PEM charging path eligible",
+        "S4": f"{price_mode} price, PV load supply path eligible",
+        "S5": "high price, battery load supply path eligible",
+        "S6": "high price, PEM load supply path eligible",
+    }
+    return reasons.get(scenario, "grid fallback")
+
+
 def _as_96_values(values: Iterable[float], name: str) -> list[float]:
-    values = [float(value) for value in values]
-
-    if len(values) == 24:
-        values = [value for value in values for _ in range(4)]
-
-    if len(values) != 96:
-        raise ValueError(f"{name} must contain 24 or 96 values, got {len(values)}.")
-
-    return values
+    result = [float(value) for value in values]
+    if len(result) == 24:
+        result = [value for value in result for _ in range(4)]
+    if len(result) != 96:
+        raise ValueError(f"{name} must contain 24 or 96 values, got {len(result)}.")
+    return result
 
 
-def _threshold_reached(value: float, threshold: float) -> bool:
-    return np.isfinite(threshold) and value >= threshold
+def _value(status: dict, keys: list[str], default: float = 0.0) -> float:
+    for key in keys:
+        if key in status and status[key] not in [None, ""]:
+            return float(status[key])
+    return default
 
 
-def _command_voltage_threshold(threshold: float) -> float:
-    if np.isfinite(threshold):
-        return float(threshold)
+def _optional_value(status: dict, keys: list[str]) -> float | None:
+    for key in keys:
+        if key in status and status[key] not in [None, ""]:
+            return float(status[key])
+    return None
 
-    return 999.0
+
+def _current_mA(status: dict, mA_keys: list[str], ampere_keys: list[str]) -> float:
+    for key in mA_keys:
+        if key in status and status[key] not in [None, ""]:
+            return float(status[key])
+    for key in ampere_keys:
+        if key in status and status[key] not in [None, ""]:
+            return float(status[key]) * 1000.0
+    return 0.0
 
 
-def _command_power_mw(power_w: float) -> float:
-    if np.isfinite(power_w):
-        return float(power_w) * 1000.0
+def _power_mW(
+    status: dict,
+    mW_keys: list[str],
+    watt_keys: list[str],
+    voltage_V: float,
+    current_mA: float,
+) -> float:
+    for key in mW_keys:
+        if key in status and status[key] not in [None, ""]:
+            return float(status[key])
+    for key in watt_keys:
+        if key in status and status[key] not in [None, ""]:
+            return float(status[key]) * 1000.0
+    return voltage_V * current_mA
 
-    return 999999.0
+
+def _soc_above_low_limit(soc: float | None, limits: EMSLimits) -> bool:
+    if soc is None:
+        return True
+    return soc > limits.battery.low_soc_percent
+
+
+def _soc_below_full_limit(soc: float | None, limits: EMSLimits) -> bool:
+    if soc is None:
+        return True
+    return soc < limits.battery.full_soc_percent
+
+
+if __name__ == "__main__":
+    run_demo()

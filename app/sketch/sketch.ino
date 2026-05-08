@@ -135,6 +135,7 @@ String get_status();
 String GetCsvField(String payload, int fieldIndex);
 bool ApplyScenarioThresholds(String payload);
 bool IsScenarioSafe(int scenario, float demandW);
+bool scenarioSafetyCheck(int scenario);
 String GetScenarioPreRejectReason(int scenario, float demandW);
 String GetLoadedValidationRejectReason(int scenario, float demandW);
 void ApplyScenario(int scenario);
@@ -294,11 +295,10 @@ bool apply_scenario_frame(String payload) {
   GetCurrent();
   GetPower();
 
-  lastRejectReason = GetScenarioPreRejectReason(requestedScenario, demandW);
-  scenarioAccepted = lastRejectReason.length() == 0;
+  scenarioAccepted = scenarioSafetyCheck(requestedScenario);
 
   if (!scenarioAccepted) {
-    Scenario1();
+    ApplyScenario(1);
     Monitor.print("Requested scenario rejected: ");
     Monitor.println(lastRejectReason);
     return false;
@@ -317,7 +317,7 @@ bool apply_scenario_frame(String payload) {
     scenarioAccepted = lastRejectReason.length() == 0;
 
     if (!scenarioAccepted) {
-      Scenario1();
+      ApplyScenario(1);
       Monitor.print("Requested scenario rejected after loaded validation: ");
       Monitor.println(lastRejectReason);
       return false;
@@ -439,6 +439,12 @@ String get_status() {
 
 bool IsScenarioSafe(int scenario, float demandW) {
   return GetScenarioPreRejectReason(scenario, demandW).length() == 0;
+}
+
+bool scenarioSafetyCheck(int scenario) {
+  float demandW = requestedDemand_mW / 1000.0;
+  lastRejectReason = GetScenarioPreRejectReason(scenario, demandW);
+  return lastRejectReason.length() == 0;
 }
 
 String GetScenarioPreRejectReason(int scenario, float demandW) {

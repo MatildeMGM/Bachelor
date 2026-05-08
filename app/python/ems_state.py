@@ -46,7 +46,7 @@ class EMSState:
         self.demo_start_epoch_ms = 0
         self.demo_start_label = ""
 
-        # Demand lookahead
+        # Demand profile
         self.demand_profile = []
         self.current_demand_w = 0.0
         self.last_demand_update = ""
@@ -205,16 +205,20 @@ class EMSState:
         from scheduler import ComponentState
 
         return ComponentState(
+            pv_voltage_V=self.panel_voltage,
+            pv_current_mA=self.pv_current * 1000.0,
+            battery_voltage_V=self.battery_voltage,
+            battery_current_mA=self.battery_current * 1000.0,
+            pem_voltage_V=self.pem_voltage,
+            pem_current_mA=self.pem_current * 1000.0,
+            load_voltage_V=self.load_voltage,
+            load_current_mA=self.load_current * 1000.0,
             battery_soc_percent=self.battery_soc,
-            battery_voltage_v=self.battery_voltage,
-            battery_energy_wh=self.battery_energy_wh,
-            pem_hydrogen_ml=self.pem_hydrogen_ml,
-            pem_voltage_v=self.pem_voltage,
-            pv_voltage_v=self.panel_voltage,
-            pv_current_a=self.pv_current,
-            pv_power_w=self.pv_power,
-            last_scenario=self.scenario or 1,
-            seconds_since_last_switch=self.seconds_since_last_switch(),
+            pv_power_mW=self.pv_power * 1000.0,
+            battery_power_mW=self.battery_power * 1000.0,
+            pem_power_mW=self.pem_power * 1000.0,
+            load_power_mW=self.load_power * 1000.0,
+            load_demand_mW=self.current_demand_w * 1000.0,
         )
 
     def apply_scheduler_decision(self, decision):

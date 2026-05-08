@@ -74,12 +74,9 @@ full: 90 to 100 percent (above approx. 3.9 V)
 - Maximum electrolysis current, limited by measured PV current of approximately 0.40 A
 - Minimum charge time before useful discharge
 - Usable discharge energy per state, calculated as sum(P · Δt)
-- PEM state:
-  - empty: no usable discharge
-  - low: short discharge time
-  - medium: moderate discharge time
-  - high: reliable discharge time
-  - full: cylinder close to maximum hydrogen level
+- PEM discharge eligibility:
+  - PEM voltage must be above the minimum usable voltage
+  - requested demand must be within the PEM discharge power limit
 - Minimum time before switching mode 
 
 ## Grid Supply
@@ -89,7 +86,9 @@ full: 90 to 100 percent (above approx. 3.9 V)
 - Maximum current (~125 mA)  
 - Maximum allowed power  
 - Electricity price  
-- Price state (low, medium, high)  
+- Price mode from one threshold:
+  - low price when price is below `PRICE_LIMITS.high_price_min_DKK_per_kWh`
+  - high price when price is at or above `PRICE_LIMITS.high_price_min_DKK_per_kWh`
 
 ## Arduino and Sensors
 - Voltage sensor calibration  
@@ -112,11 +111,11 @@ send measurements back to Python
 # controller.py
 read live measurements from Arduino
 read price and demand profiles
-read battery and PEM state tables
+read battery and PEM measurements
 estimate battery SOC
-estimate PEM state
-choose best operating mode
-send selected mode to Arduino
+estimate PEM hydrogen volume
+choose best scenario
+send selected scenario to Arduino
 log system behaviour
 
 # main.py

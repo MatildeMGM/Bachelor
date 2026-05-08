@@ -2,8 +2,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from pathlib import Path
-
 CSV_PATH = Path(__file__).parent / "Elspotprices.csv"
 
 data = pd.read_csv(CSV_PATH, sep=";")
@@ -36,23 +34,16 @@ prices_dkk_kwh = load_spot_prices(CSV_PATH, PRICE_COLUMN)
 
 price_min = prices_dkk_kwh.min()
 price_max = prices_dkk_kwh.max()
-price_range = price_max - price_min
-
-low_threshold = prices_dkk_kwh.quantile(0.25)
-high_threshold = prices_dkk_kwh.quantile(0.75)
+price_threshold = prices_dkk_kwh.quantile(0.50)
 
 
 thresholds = {
     "low": {
         "min": price_min,
-        "max": low_threshold,
-    },
-    "medium": {
-        "min": low_threshold,
-        "max": high_threshold,
+        "max": price_threshold,
     },
     "high": {
-        "min": high_threshold,
+        "min": price_threshold,
         "max": price_max,
     },
 }
@@ -62,13 +53,12 @@ print(f"Minimum price: {price_min:.4f} DKK/kWh")
 print(f"Maximum price: {price_max:.4f} DKK/kWh")
 print()
 print("Electricity price thresholds")
-print(f"Low price:    {price_min:.4f} to {low_threshold:.4f} DKK/kWh")
-print(f"Medium price: {low_threshold:.4f} to {high_threshold:.4f} DKK/kWh")
-print(f"High price:   {high_threshold:.4f} to {price_max:.4f} DKK/kWh")
+print(f"Single threshold: {price_threshold:.4f} DKK/kWh")
+print(f"Low price mode:   below {price_threshold:.4f} DKK/kWh")
+print(f"High price mode:  {price_threshold:.4f} DKK/kWh and above")
 
 thresholds
 # Electricity price thresholds
-# Low price:    <0.2857 DKK/kWh
-# Medium price: 0.2857 to 0.8308 DKK/kWh
-# High price:   0.8308< DKK/kWh
+# Low price mode:   < PRICE_LIMITS.high_price_min_DKK_per_kWh
+# High price mode:  >= PRICE_LIMITS.high_price_min_DKK_per_kWh
 

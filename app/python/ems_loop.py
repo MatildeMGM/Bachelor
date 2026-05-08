@@ -23,7 +23,7 @@ from ems_state import known_clients, state, state_lock
 from scheduler import (
     SchedulerConfig,
     build_config_command,
-    decide_current_scenario,
+    decide_slot_scenario,
     load_limits,
     load_scaled_demand_profile,
 )
@@ -44,11 +44,13 @@ LOG_FIELDS = [
     "sim_time",
     "sim_interval",
     "price_dkk_kwh",
-    "price_state",
-    "demand_state",
-    "pv_state",
-    "battery_state",
-    "pem_state",
+    "price_mode",
+    "price_threshold_dkk_kwh",
+    "pv_can_charge_battery",
+    "pv_can_charge_pem",
+    "pv_can_supply_load",
+    "battery_can_supply_load",
+    "pem_can_supply_load",
     "demand_w",
     "target_scenario",
     "actual_scenario",
@@ -175,6 +177,7 @@ def build_payload():
             "current_decision": state.current_decision,
             "current_command": state.current_command,
             "target_scenario": state.target_scenario,
+            "price_threshold_dkk_kwh": limits.price.high_price_min_DKK_per_kWh,
             "last_decision_update": state.last_decision_update,
             "log_file": state.log_file,
             "last_log_update": state.last_log_update,
@@ -258,11 +261,14 @@ def run_scheduler_decision():
     if not state.prices or not state.demand_profile:
         return
 
-    decision = decide_current_scenario(
+    status_for_scheduler = dict(state.arduino_status)
+    status_for_scheduler["batterySOC"] = state.battery_soc
+
+    decision = decide_slot_scenario(
         prices=state.prices,
         demand_profile=state.demand_profile,
         current_slot=state.current_slot,
-        component_state=state.to_component_state(),
+        status=status_for_scheduler,
         limits=limits,
         config=scheduler_config,
     )
@@ -304,6 +310,7 @@ def log_current_slot():
 
     decision = state.current_decision
     status = state.arduino_status
+    threshold_checks = decision.get("threshold_checks", {})
 
     row = {
         "real_time": get_now().isoformat(timespec="seconds"),
@@ -312,11 +319,13 @@ def log_current_slot():
         "sim_time": state.current_time_label,
         "sim_interval": state.current_interval_label,
         "price_dkk_kwh": state.current_price,
-        "price_state": decision.get("price_state", ""),
-        "demand_state": decision.get("demand_state", ""),
-        "pv_state": decision.get("pv_state", ""),
-        "battery_state": decision.get("battery_state", ""),
-        "pem_state": decision.get("pem_state", ""),
+        "price_mode": decision.get("price_mode", ""),
+        "price_threshold_dkk_kwh": decision.get("price_threshold_dkk_kwh", ""),
+        "pv_can_charge_battery": threshold_checks.get("pv_can_charge_battery", ""),
+        "pv_can_charge_pem": threshold_checks.get("pv_can_charge_pem", ""),
+        "pv_can_supply_load": threshold_checks.get("pv_can_supply_load", ""),
+        "battery_can_supply_load": threshold_checks.get("battery_can_supply_load", ""),
+        "pem_can_supply_load": threshold_checks.get("pem_can_supply_load", ""),
         "demand_w": state.current_demand_w,
         "target_scenario": state.target_scenario,
         "actual_scenario": actual_scenario_from_mode(status.get("mode", "")),
