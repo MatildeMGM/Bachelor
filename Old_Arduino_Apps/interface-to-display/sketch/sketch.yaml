@@ -1,0 +1,16 @@
+profiles:
+  default:
+    fqbn: 
+    platforms:
+      - platform: arduino:zephyr
+    libraries:
+      - LiquidCrystal (1.0.7)
+      - dependency: Arduino_RPClite (0.2.1)
+      - Arduino_RouterBridge (0.3.0)
+      - dependency: ArxContainer (0.7.0)
+      - dependency: ArxTypeTraits (0.3.2)
+      - dependency: DebugLog (0.8.4)
+      - MsgPack (0.4.2)
+      - ArduinoThread (2.1.1)
+
+default_profile: default

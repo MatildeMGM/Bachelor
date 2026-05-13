@@ -1,0 +1,6 @@
+name: Wind-H2 Strategy S1 Dashboard
+description: Simulated off-grid wind-hydrogen system with Strategy S1 and live browser dashboard.
+ports: []
+bricks:
+- arduino:web_ui: {}
+icon: 🌬️

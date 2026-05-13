@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>INA226 + LED Test Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Arduino App Lab · UNO Q Test Interface</div>
+        <h1>INA226 + LED Line Test Dashboard</h1>
+        <p class="subtitle">
+          Live monitoring of four INA226 sensors and the six Nano/LED test lines
+        </p>
+      </div>
+      <div class="top-actions">
+        <span class="badge" id="connBadge">Connecting…</span>
+        <span class="badge" id="bridgeBadge">Bridge: -</span>
+      </div>
+    </header>
+
+    <section class="toolbar card">
+      <div class="toolbar-group">
+        <button class="btn primary" id="refreshBtn">Refresh now</button>
+        <button class="btn" id="autoBtn">Auto cycle</button>
+        <button class="btn" id="manualBtn">Manual mode</button>
+      </div>
+
+      <div class="toolbar-group right">
+        <label for="intervalSelect">Auto interval</label>
+        <select id="intervalSelect">
+          <option value="500">500 ms</option>
+          <option value="1000">1000 ms</option>
+          <option value="1500" selected>1500 ms</option>
+          <option value="2000">2000 ms</option>
+          <option value="3000">3000 ms</option>
+        </select>
+      </div>
+    </section>
+
+    <main class="layout">
+      <section class="kpi-grid">
+        <div class="card kpi">
+          <span>LED mode</span>
+          <strong id="kpiLedMode">-</strong>
+        </div>
+        <div class="card kpi">
+          <span>Active line</span>
+          <strong id="kpiActiveLine">-</strong>
+        </div>
+        <div class="card kpi">
+          <span>Active Uno pin</span>
+          <strong id="kpiActivePin">-</strong>
+        </div>
+        <div class="card kpi">
+          <span>Update time</span>
+          <strong id="kpiUpdateTime">-</strong>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="card">
+          <h2>LED test control</h2>
+          <div class="meta-grid">
+            <div>Mode <strong id="ledModeText">-</strong></div>
+            <div>Index <strong id="activeSignalIndex">-</strong></div>
+            <div>Line <strong id="activeSignalName">-</strong></div>
+            <div>Uno pin <strong id="activeSignalPin">-</strong></div>
+          </div>
+          <p class="note" id="lastUpdateText">Last update: -</p>
+          <p class="note error" id="errorText"></p>
+        </div>
+
+        <div class="card">
+          <h2>Manual signal selection</h2>
+          <div class="metric-grid" id="signalButtons">
+            <button class="btn" data-index="0">LEDS1 / Nano D7 / Uno D12</button>
+            <button class="btn" data-index="1">LEDS2 / Nano D4 / Uno D0</button>
+            <button class="btn" data-index="2">LEDS3 / Nano D3 / Uno D11</button>
+            <button class="btn" data-index="3">LEDS4 / Nano D6 / Uno D6</button>
+            <button class="btn" data-index="4">LEDS5 / Nano D5 / Uno D1</button>
+            <button class="btn" data-index="5">LEDS6 / Nano D2 / Uno D13</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>INA226 sensor summary</h2>
+        <div class="metric-grid">
+          <div class="metric-card"><span>INA count</span><strong id="sensorCount">-</strong><small>devices</small></div>
+          <div class="metric-card"><span>Read interval</span><strong id="readInterval">-</strong><small>ms</small></div>
+          <div class="metric-card"><span>Total power</span><strong id="totalPower">-</strong><small>mW</small></div>
+          <div class="metric-card"><span>Max current</span><strong id="maxCurrent">-</strong><small>mA</small></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>INA226 readings</h2>
+        <div class="table-wrap">
+          <table id="inaTable">
+            <thead>
+              <tr>
+                <th>Sensor</th>
+                <th>Address</th>
+                <th>Bus Voltage [V]</th>
+                <th>Current [mA]</th>
+                <th>Power [mW]</th>
+                <th>Shunt [mV]</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

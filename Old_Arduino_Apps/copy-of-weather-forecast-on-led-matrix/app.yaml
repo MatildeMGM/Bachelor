@@ -1,0 +1,6 @@
+name: Copy of Weather forecast on LED matrix
+description: A weather forecast system that get the current weather and display it on LED matrix.
+ports: []
+bricks:
+- arduino:weather_forecast: {}
+icon: ☀️
