@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wind-H2 S1 Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Using Arduino App Lab · Web UI brick</div>
+        <h1>Wind-H₂ Strategy S1 Dashboard</h1>
+        <p class="subtitle">4.2 MW wind profile · 4 × 1 MW electrolyzers · 5 min simulated step from paper</p>
+        <p class="subtitle">"Off-grid wind/hydrogen systems with multi-electrolyzers: Optimized operational strategies: Zheng Y, Huang C, Tan J, You S, Zong Y, Træholt C"</p>
+      </div>
+      <div class="top-actions">
+        <span class="badge" id="connBadge">Connecting…</span>
+        <span class="badge status" id="runBadge">Running</span>
+      </div>
+    </header>
+
+    <section class="toolbar card">
+      <div class="toolbar-group">
+        <button class="btn primary" id="toggleBtn">Pause</button>
+        <button class="btn" id="stepBtn">Single step</button>
+        <button class="btn" id="resetBtn">Reset</button>
+      </div>
+      <div class="toolbar-group right">
+        <label for="strategySelect">Strategy</label>
+        <select id="strategySelect">
+          <option value="S1">S1 - Fixed priority</option>
+          <option value="S2">S2 - Rotating priority</option>
+        </select>
+        <label for="speedSelect">Step every</label>
+        <select id="speedSelect">
+          <option value="0.25">0.25 s</option>
+          <option value="0.5">0.5 s</option>
+          <option value="1" selected>1.0 s</option>
+          <option value="2">2.0 s</option>
+          <option value="5">5.0 s</option>
+        </select>
+      </div>
+    </section>
+
+    <main class="layout">
+      <section class="kpi-grid">
+        <div class="card kpi"><span>Wind power</span><strong id="kpiWind">-</strong></div>
+        <div class="card kpi"><span>Electrolyzer power</span><strong id="kpiUsed">-</strong></div>
+        <div class="card kpi"><span>Curtailed power</span><strong id="kpiCurtail">-</strong></div>
+        <div class="card kpi"><span>Total H₂</span><strong id="kpiH2">-</strong></div>
+        <div class="card kpi"><span>System efficiency</span><strong id="kpiEff">-</strong></div>
+        <div class="card kpi"><span>NHS / NCS</span><strong id="kpiStarts">-</strong></div>
+      </section>
+
+      <section class="layout">
+        <div class="card">
+          <h2>Wind, used and curtailed power</h2>
+          <canvas id="powerCanvas" width="900" height="280"></canvas>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="card meta-card">
+          <h2>Runtime</h2>
+          <div class="meta-grid">
+            <div>Browser clients <strong id="rtClients">-</strong></div>
+            <div>Step interval <strong id="rtInterval">-</strong></div>
+            <div>Simulation step <strong id="rtSimStep">-</strong></div>
+            <div>Bridge to MCU <strong id="rtBridge">-</strong></div>
+            <div>Profile points <strong id="metaPoints">-</strong></div>
+            <div>Standby → off <strong id="metaStandby">-</strong></div>
+            <div>Strategy <strong id="strategyLabel">-</strong></div>
+            <div>Dispatch order <strong id="dispatchOrder">-</strong></div>
+          </div>
+          <p class="note" id="runtimeNote"></p>
+        </div>
+        <div class="card meta-card">
+          <h2>Model note</h2>
+          <p class="note" id="approxNote">-</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Electrolyzer states and operating points</h2>
+        <div class="elec-grid" id="elecGrid"></div>
+      </section>
+
+      <section class="card">
+        <h2>Recent history</h2>
+        <div class="table-wrap">
+          <table id="historyTable">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Step</th>
+                <th>Wind (kW)</th>
+                <th>Electrolyzer (kW)</th>
+                <th>Curtail (kW)</th>
+                <th>H₂ total (kg)</th>
+                <th>Efficiency</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

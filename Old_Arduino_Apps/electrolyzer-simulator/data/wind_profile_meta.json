@@ -1,0 +1,15 @@
+{
+  "source_csv": "50Hertz.csv",
+  "raw_points": 38112,
+  "processed_points": 114334,
+  "raw_step_seconds": 900,
+  "sim_step_seconds": 300,
+  "scale_mode": "normalize_to_rated",
+  "rated_kw": 4200.0,
+  "raw_min": 0.0,
+  "raw_max": 725.0,
+  "raw_mean": 143.60778757346768,
+  "scaled_min_kw": 0.0,
+  "scaled_max_kw": 4200.0,
+  "scaled_mean_kw": 831.9422285463704
+}
