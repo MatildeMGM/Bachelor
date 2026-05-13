@@ -1,5 +1,0 @@
-name: Bachelor_Arduino_Q_INA_LED_Test
-description: UNO Q test app for INA226 monitoring and LED/Nano line testing
-ports: []
-bricks:
-- arduino:web_ui: {}
