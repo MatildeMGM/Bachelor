@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EMS Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <header class="hero">
+    <div>
+      <h1>EMS Dashboard</h1>
+      <p>
+        Supervisory Python EMS with six scenarios, manual scenario control,
+        manual price input, virtual battery charge, hydrogen estimation and live INA measurements in V, mA and mW.
+      </p>
+    </div>
+
+    <span id="connectionBadge" class="badge bad">Disconnected</span>
+  </header>
+
+  <main>
+    <section class="card controls">
+      <div class="section-title-row">
+        <div>
+          <h2>Demo and EMS control</h2>
+          <p class="muted">
+            Start the EMS system first. Then start the demo to reset the 96-slot timeline,
+            begin CSV logging and activate the variable load trigger. Raw logging can run independently
+            of the demo.
+          </p>
+        </div>
+
+        <div class="badge-row">
+          <span id="emsBadge" class="badge warn">EMS: standby</span>
+          <span id="bridgeBadge" class="badge">Bridge: -</span>
+        </div>
+      </div>
+
+      <div class="button-row">
+        <button id="resetBtn" class="btn">Reset</button>
+        <button id="startEmsBtn" class="btn primary">Start EMS system</button>
+        <button id="stopEmsBtn" class="btn">Stop EMS system</button>
+        <button id="startDemoBtn" class="btn primary">Start demo + logging</button>
+        <button id="stopDemoBtn" class="btn">Stop demo</button>
+        <button id="autoModeBtn" class="btn">Auto mode</button>
+        <button id="manualModeBtn" class="btn">Manual mode</button>
+      </div>
+
+      <div class="button-row">
+        <button id="toggleRawLogBtn" class="btn">Start raw log</button>
+      </div>
+
+      <div class="timeline-summary">
+        <div>Raw log <strong id="rawLogStatusText">Stopped</strong></div>
+        <div>Raw log file <strong id="rawLogFileText">-</strong></div>
+        <div>Raw samples <strong id="rawLogSamplesText">0</strong></div>
+        <div>Last raw update <strong id="lastRawLogUpdateText">-</strong></div>
+      </div>
+
+      <div class="control-grid four">
+        <label>
+          Price test date
+          <input id="priceDateInput" type="date">
+          <button id="applyPriceDateBtn" class="btn small">Load prices for date</button>
+        </label>
+
+        <label>
+          Manual electricity price
+          <input id="manualPriceInput" type="number" step="0.00001" placeholder="DKK/kWh">
+          <button id="applyManualPriceBtn" class="btn small">Apply manual price</button>
+        </label>
+
+        <label>
+          Hydrogen estimation (%)
+          <input id="hydrogenEstimationInput" type="number" min="0" max="100" step="0.1" value="0">
+          <button id="initHydrogenBtn" class="btn small">Initiate H2 estimation manually</button>
+        </label>
+
+        <label>
+          Virtual battery charge state (%)
+          <input id="batterySocInput" type="number" min="0" max="100" step="0.1" value="50">
+          <button id="applyBatteryBtn" class="btn small">Apply virtual battery state</button>
+        </label>
+      </div>
+    </section>
+
+    <section class="grid-4">
+      <article class="card kpi">
+        <span>Control mode</span>
+        <strong id="controlModeText">-</strong>
+      </article>
+
+      <article class="card kpi">
+        <span>Demo status</span>
+        <strong id="demoStatusText">-</strong>
+      </article>
+
+      <article class="card kpi">
+        <span>Current slot</span>
+        <strong id="currentSlotText">-</strong>
+      </article>
+
+      <article class="card kpi">
+        <span>Scenario</span>
+        <strong id="scenarioText">-</strong>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="section-title-row">
+        <div>
+          <h2>System state timeline</h2>
+          <p class="muted">
+            One plot showing the selected price curve, demand profile and measured INA power in mW for PV, load, battery and PEM.
+            Scenario background is shown where a slot has been logged.
+          </p>
+        </div>
+
+        <div class="legend">
+          <span><i class="swatch price"></i>Price</span>
+          <span><i class="swatch threshold"></i>Price threshold</span>
+          <span><i class="swatch demand"></i>Demand</span>
+          <span><i class="swatch pv"></i>PV power</span>
+          <span><i class="swatch load"></i>Load power</span>
+          <span><i class="swatch battery"></i>Battery power</span>
+          <span><i class="swatch pem"></i>PEM power</span>
+        </div>
+      </div>
+
+      <div class="chart-wrap">
+        <canvas id="emsTimeline"></canvas>
+      </div>
+
+      <div class="timeline-summary">
+        <div>Time <strong id="timelineTime">-</strong></div>
+        <div>Interval <strong id="timelineInterval">-</strong></div>
+        <div>Price <strong id="plotPrice">-</strong></div>
+        <div>Demand <strong id="plotDemand">-</strong></div>
+        <div>PV power <strong id="plotPV">-</strong></div>
+        <div>Load power <strong id="plotLoad">-</strong></div>
+        <div>Battery power <strong id="plotBattery">-</strong></div>
+        <div>PEM power <strong id="plotPEM">-</strong></div>
+        <div>Virtual battery charge <strong id="plotBatterySoc">-</strong></div>
+        <div>Hydrogen estimation <strong id="plotHydrogen">-</strong></div>
+        <div>Actual scenario <strong id="actualScenarioText">-</strong></div>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <article class="card">
+        <h2>Current EMS decision</h2>
+        <div id="decisionText" class="decision">-</div>
+
+        <table>
+          <tbody>
+            <tr><th>EMS system</th><td id="emsStatusText">-</td></tr>
+            <tr><th>Target scenario</th><td id="targetScenarioText">-</td></tr>
+            <tr><th>Actual scenario</th><td id="actualScenarioTableText">-</td></tr>
+            <tr><th>Reject reason</th><td id="rejectReasonText" class="reject-reason"></td></tr>
+            <tr><th>Price state</th><td id="priceStateText">-</td></tr>
+            <tr><th>Current price</th><td id="currentPriceText">-</td></tr>
+            <tr><th>Current demand</th><td id="currentDemandText">-</td></tr>
+            <tr><th>PV available</th><td id="pvAvailableText">-</td></tr>
+            <tr><th>Log file</th><td id="logFileText">-</td></tr>
+            <tr><th>Last log update</th><td id="lastLogUpdateText">-</td></tr>
+            <tr><th>Error</th><td id="errorText">-</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="card">
+        <h2>Manual scenarios</h2>
+        <p class="muted">
+          Selecting a scenario switches the EMS to manual mode and sends the scenario once.
+        </p>
+
+        <div class="scenario-grid">
+          <button class="btn scenario-btn" data-scenario="1">S1 Grid → Load</button>
+          <button class="btn scenario-btn" data-scenario="2">S2 Grid → Load, PV → Battery</button>
+          <button class="btn scenario-btn" data-scenario="3">S3 Grid → Load, PV → PEM</button>
+          <button class="btn scenario-btn" data-scenario="4">S4 PV → Load</button>
+          <button class="btn scenario-btn" data-scenario="5">S5 Battery → Load</button>
+          <button class="btn scenario-btn" data-scenario="6">S6 PEM → Load</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid-2">
+      <article class="card">
+        <h2>Storage states</h2>
+
+        <table>
+          <tbody>
+            <tr><th>Current battery voltage</th><td id="storageBatteryVoltageText">-</td></tr>
+            <tr><th>Initial SoC lookup voltage</th><td id="realBatteryInitialVoltageText">-</td></tr>
+            <tr><th>Lookup-estimated real battery SoC</th><td id="realBatteryLookupSocText">-</td></tr>
+            <tr><th>Integrated real battery SoC</th><td id="realBatterySocText">-</td></tr>
+            <tr><th>Integrated real battery charge</th><td id="realBatteryEnergyText">-</td></tr>
+            <tr><th>Virtual battery SoC</th><td id="batterySocText">-</td></tr>
+            <tr><th>Virtual battery capacity</th><td id="batteryCapacityText">-</td></tr>
+            <tr><th>Virtual battery charge</th><td id="batteryEnergyText">-</td></tr>
+            <tr><th>Virtual battery state</th><td id="batteryStateText">-</td></tr>
+            <tr><th>Hydrogen volume</th><td id="h2VolumeText">-</td></tr>
+            <tr><th>Usable hydrogen</th><td id="h2UsableText">-</td></tr>
+            <tr><th>Hydrogen estimation</th><td id="h2SocText">-</td></tr>
+            <tr><th>Hydrogen mode</th><td id="h2ModeText">-</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="card">
+        <h2>INA sensor measurements</h2>
+        <table>
+          <tbody id="measurementTable"></tbody>
+        </table>
+      </article>
+    </section>
+  </main>
+
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script src="app.js?v=15"></script>
+</body>
+</html>
