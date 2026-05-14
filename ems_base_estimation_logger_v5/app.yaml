@@ -3,4 +3,4 @@ description: 24min testing and demand profile 15-75mW and PEM limited to below 4
 ports: []
 bricks:
 - arduino:web_ui: {}
-icon: 🥹
+icon: 🖥️
