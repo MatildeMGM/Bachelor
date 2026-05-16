@@ -1,18 +1,50 @@
+"""
+File: bridge.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    The purpose of the script is to act as a communication bridge between the
+    Python EMS application and the Arduino microcontroller. It receives measured
+    status values from the Arduino and sends control commands for price state,
+    scenario selection, relays, and load activation.
+
+    The script is used to support the implementation of the embedded EMS control
+    logic presented in the bachelor report.
+
+Authors:
+    Jacob Norman Sørensen
+    Matilde Marie Grønkjær Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from __future__ import annotations
-
 from datetime import datetime
-
 from arduino.app_utils import Bridge
-
 from config import BRIDGE_TIMEOUT, DK_TZ
 from ems_state import state
 
 
 def get_now():
+    """
+    Returns the current date and time as a formatted timestamp string for logging or status messages.
+    """
+    
     return datetime.now(DK_TZ)
 
 
 def parse_status_string(raw):
+    """
+    Parses the raw status string received from the Arduino into structured measurement and state values.
+    """
+    
     result = {}
 
     if not raw:
@@ -70,11 +102,19 @@ def parse_status_string(raw):
 
 
 def fetch_arduino_status():
+    """
+    Requests the latest status data from the Arduino and returns it as structured values for the EMS.
+    """
+
     raw = Bridge.call("get_status", timeout=BRIDGE_TIMEOUT)
     return parse_status_string(raw)
 
 
 def push_price_to_mcu():
+    """
+    Sends the current price information to the Arduino microcontroller.
+    """
+
     payload = "PRICE,{price:.5f},{slot}".format(
         price=state.current_price,
         slot=state.current_slot,
@@ -87,6 +127,10 @@ def push_price_to_mcu():
 
 
 def push_scenario_to_mcu(command):
+    """
+    Sends the selected EMS scenario command to the Arduino microcontroller.
+    """
+
     if not command:
         return None
 
@@ -97,6 +141,10 @@ def push_scenario_to_mcu(command):
 
 
 def push_manual_scenario_to_mcu(command):
+    """
+    Sends a manual override scenario command to the Arduino microcontroller, prefixed to indicate it's a manual scenario.
+    """
+
     if not command:
         return None
 
@@ -109,6 +157,10 @@ def push_manual_scenario_to_mcu(command):
 
 
 def push_relay_to_mcu(relay, output_state):
+    """
+    Sends a command to the Arduino microcontroller to set the state of a specific relay (K1-K7) based on the provided output state.
+    """
+
     relay_name = str(relay).upper()
     value = 1 if int(output_state) else 0
     payload = f"RELAY,{relay_name},{value}"
@@ -120,6 +172,10 @@ def push_relay_to_mcu(relay, output_state):
 
 
 def push_load_trigger_to_mcu(active):
+    """
+    Sends a command to the Arduino microcontroller to set the state of the load trigger based on the provided active state.
+    """
+
     value = 1 if active else 0
     payload = f"LOAD_TRIGGER,{value}"
 
