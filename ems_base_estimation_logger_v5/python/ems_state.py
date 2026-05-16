@@ -1,14 +1,38 @@
-from __future__ import annotations
+"""
+File: ems_state.py
 
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script defines the EMSState class, which gathers the current
+    state of the Energy Management System (EMS).
+  
+Authors:
+    Jacob Norman Sørensen
+    Matilde Marie Grønkjær Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
+from __future__ import annotations
 import threading
 import time
 from datetime import datetime
-
 from config import DEFAULT_PRICE_ZONE, DK_TZ, PRICE_SOURCE
 from ems_limits import EMS_LIMITS
 
 
 def _as_float(value, default=0.0):
+    """
+    Converts a value to float.
+    """
+
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -16,10 +40,18 @@ def _as_float(value, default=0.0):
 
 
 def _clamp(value, minimum, maximum):
+    """
+    Clamps a value between a minimum and maximum.
+    """
+
     return max(minimum, min(maximum, value))
 
 
 def _scenario_from_mode(mode):
+    """
+    Extracts the scenario number from the mode string.
+    """ 
+
     text = str(mode or "")
 
     for scenario in range(1, 7):
@@ -30,6 +62,9 @@ def _scenario_from_mode(mode):
 
 
 def _empty_live_history():
+    """
+    Returns an empty structure for storing time-series data.
+    """
     return {
         "cycle": 0,
         "pv_power_mW": [None] * 96,
@@ -41,16 +76,28 @@ def _empty_live_history():
 
 
 def _h2_usable_range_mL():
+    """
+    Returns the usable hydrogen volume range in mL based on the PEM limits.
+    """
+    
     return EMS_LIMITS.pem.h2_max_mL - EMS_LIMITS.pem.h2_min_usable_mL
 
 
 def _h2_volume_from_soc(soc_percent):
+    """
+    Converts a PEM state of charge percentage to an estimated hydrogen volume in mL.
+    """
+
     soc_fraction = _clamp(float(soc_percent), 0.0, 100.0) / 100.0
 
     return EMS_LIMITS.pem.h2_min_usable_mL + soc_fraction * _h2_usable_range_mL()
 
 
 def _h2_soc_from_volume(h2_volume_mL):
+    """
+    Converts a hydrogen volume in mL to a PEM state of charge percentage.
+    """
+
     usable_range = _h2_usable_range_mL()
 
     if usable_range <= 0:
@@ -65,10 +112,18 @@ def _h2_soc_from_volume(h2_volume_mL):
 
 
 def _virtual_battery_capacity_mAh():
+    """
+    Returns the virtual battery capacity in mAh.
+    """
+
     return EMS_LIMITS.battery.demo_capacity_mAh
 
 
 def _virtual_battery_voltage_for_current(battery_voltage=0.0):
+    """
+    Returns the virtual battery voltage in V based on the battery voltage.
+    """
+
     voltage = _as_float(battery_voltage, EMS_LIMITS.battery.demo_nominal_voltage_V)
 
     if voltage <= 0.1:
@@ -98,10 +153,19 @@ BATTERY_SOC_LOOKUP_POINTS = (
 
 
 def _real_battery_capacity_mAh():
+    """
+    Returns the estimated real battery capacity in mAh.
+    """
+
     return EMS_LIMITS.battery.real_capacity_mAh
 
 
 def _estimate_real_battery_soc_from_voltage(voltage):
+    """
+    Estimates the real battery state of charge percentage 
+    based on the battery voltage using a lookup table and interpolation.
+    """
+
     voltage = _as_float(voltage, None)
 
     if voltage is None:
@@ -134,6 +198,10 @@ def _estimate_real_battery_soc_from_voltage(voltage):
 
 
 def _real_battery_voltage_inside_lookup_range(voltage):
+    """
+    Checks if the real battery voltage is within the range of the SOC lookup table.
+    """
+
     voltage = _as_float(voltage, None)
 
     if voltage is None:
@@ -143,6 +211,11 @@ def _real_battery_voltage_inside_lookup_range(voltage):
 
 
 def _real_battery_charge_state(soc_percent, initialized=True):
+    """
+    Determines the real battery charge state category
+    based on the state of charge percentage and initialization status.
+    """
+
     if not initialized:
         return "waiting_for_initial_soc"
 
@@ -162,6 +235,10 @@ def _real_battery_charge_state(soc_percent, initialized=True):
 
 
 class EMSState:
+    """
+    Gathers the current state of the Energy Management System (EMS). 
+    """
+
     def __init__(self):
         self.prices = []
         self.price_mode = "api"
@@ -240,22 +317,15 @@ class EMSState:
         self.clients = 0
         self.arduino_status = {}
 
-        # Virtual battery state used by the short EMS demo.
-        # The EMS battery model is now handled in mAh and updated with real
-        # elapsed seconds, not accelerated demo time.
         self.battery_soc = 50.0
         self.battery_virtual_capacity_mah = _virtual_battery_capacity_mAh()
         self.battery_charge_mah = self.battery_virtual_capacity_mah * self.battery_soc / 100.0
         self.battery_charge_state = "medium"
 
-        # Backwards-compatible derived values. They are not used as the primary
-        # battery state, but keeping them avoids breaking older UI/log code.
         self.battery_energy_mWh = 0.0
         self.battery_energy_wh = 0.0
         self.battery_virtual_capacity_mWh = 0.0
 
-        # Real physical battery estimate. This is now owned by Python, not the
-        # Arduino sketch. The Arduino only supplies voltage/current/power I/O.
         self.real_battery_soc = 0.0
         self.real_battery_charge_mAh = 0.0
         self.real_battery_capacity_mAh = _real_battery_capacity_mAh()
@@ -268,7 +338,6 @@ class EMSState:
         self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][1]
         self.real_battery_last_update_monotonic = None
 
-        # Backwards-compatible real battery energy estimate.
         self.real_battery_energy_wh = 0.0
 
         self.pem_soc = 0.0
@@ -285,6 +354,9 @@ class EMSState:
         self.sync_hydrogen_state()
 
     def apply_arduino_status(self, status):
+        """
+        Applies the latest status data from the Arduino to update the EMS state attributes.
+        """
         self.arduino_status = status or {}
 
         self.panel_voltage = _as_float(self.arduino_status.get("panelVoltage"))
@@ -298,9 +370,6 @@ class EMSState:
             )
         )
 
-        # Arduino still reports its original raw fields in A and W for
-        # backwards compatibility. The Python EMS converts and stores all
-        # currents in mA and powers in mW.
         self.pv_current = _as_float(
             self.arduino_status.get("PVcurrent_mA"),
             _as_float(self.arduino_status.get("PVcurrent")) * 1000.0,
@@ -361,6 +430,10 @@ class EMSState:
             self.last_scenario_change_monotonic = time.monotonic()
 
     def update_current_demand(self):
+        """
+        Updates the current demand power in mW and W.
+        """
+
         if self.demand_profile and len(self.demand_profile) > self.current_slot:
             self.current_demand_mW = _as_float(self.demand_profile[self.current_slot])
         else:
@@ -369,6 +442,10 @@ class EMSState:
         self.current_demand_w = self.current_demand_mW / 1000.0
 
     def update_price_state(self):
+        """
+        Updates the price state based on the current price and threshold.
+        """
+
         if self.price_mode == "manual":
             return
 
@@ -379,6 +456,10 @@ class EMSState:
         )
 
     def update_pv_latch(self):
+        """
+        Updates the PV availability latch.
+        """
+
         now = time.monotonic()
 
         if self.pv_mode == "force_available":
@@ -410,9 +491,16 @@ class EMSState:
             self.pv_low_power_since = None
 
     def pv_available(self):
+        """
+        Returns whether the PV source is available based on the latch state.
+        """
+
         return bool(self.pv_latched_available)
 
     def seconds_since_last_switch(self):
+        """
+        Number of seconds since the last scenario change.
+        """
         return max(0.0, time.monotonic() - self.last_scenario_change_monotonic)
 
     def reset_live_history(self):
@@ -420,6 +508,10 @@ class EMSState:
         self.live_history["cycle"] = self.demo_cycle
 
     def update_live_history(self):
+        """
+        Updates the live history with the current state information.
+        """
+
         if not self.live_history or self.live_history.get("cycle") != self.demo_cycle:
             self.reset_live_history()
 
@@ -433,6 +525,10 @@ class EMSState:
         self.live_history["scenario"][slot] = scenario
 
     def sync_virtual_battery_state(self):
+        """ 
+        Synchronizes the virtual battery state based on the current charge and capacity. 
+        """
+
         capacity_mAh = _virtual_battery_capacity_mAh()
         self.battery_virtual_capacity_mah = capacity_mAh
 
@@ -447,8 +543,6 @@ class EMSState:
         else:
             self.battery_soc = 0.0
 
-        # Derived values kept only for compatibility with older code. The EMS
-        # battery state itself is expressed in mAh.
         voltage = _virtual_battery_voltage_for_current(self.battery_voltage)
         self.battery_energy_mWh = self.battery_charge_mah * voltage
         self.battery_energy_wh = self.battery_energy_mWh / 1000.0
@@ -464,6 +558,10 @@ class EMSState:
             self.battery_charge_state = "control_full"
 
     def update_virtual_battery_from_scenario(self, dt_seconds):
+        """
+        Updates the virtual battery state based on the current scenario and time step.
+        """
+
         if dt_seconds <= 0:
             return
 
@@ -496,6 +594,10 @@ class EMSState:
         self.sync_virtual_battery_state()
 
     def set_virtual_battery_soc(self, soc_percent):
+        """
+        Sets the state of charge for the virtual battery.
+        """
+
         capacity_mAh = _virtual_battery_capacity_mAh()
         soc = _clamp(float(soc_percent), 0.0, 100.0)
 
@@ -505,6 +607,10 @@ class EMSState:
         self.sync_virtual_battery_state()
 
     def sync_real_battery_state(self):
+        """
+        Synchronizes the real battery state based on the current charge and capacity. 
+        """
+
         capacity_mAh = _real_battery_capacity_mAh()
         self.real_battery_capacity_mAh = capacity_mAh
 
@@ -527,6 +633,10 @@ class EMSState:
         )
 
     def reset_real_battery_soc_estimator(self):
+        """
+        Resets the real battery state of charge estimator to its initial state.
+        """
+
         self.real_battery_soc = 0.0
         self.real_battery_charge_mAh = 0.0
         self.real_battery_capacity_mAh = _real_battery_capacity_mAh()
@@ -541,6 +651,10 @@ class EMSState:
         self.real_battery_energy_wh = 0.0
 
     def initialize_real_battery_from_lookup(self):
+        """
+        Initializes the real battery state from a lookup table based on voltage.
+        """
+
         lookup_soc = _estimate_real_battery_soc_from_voltage(self.battery_voltage)
 
         if lookup_soc is None:
@@ -557,6 +671,11 @@ class EMSState:
         return True
 
     def update_real_battery_from_current(self, dt_seconds):
+        """
+        Updates the real battery state based on the current and time step, 
+        using Coulomb integration after initialization from lookup.
+        """
+
         self.real_battery_lookup_soc_percent = _estimate_real_battery_soc_from_voltage(
             self.battery_voltage
         )
@@ -580,6 +699,10 @@ class EMSState:
         self.sync_real_battery_state()
 
     def sync_hydrogen_state(self):
+        """
+        Synchronizes the hydrogen state based on the current volume and PEM limits.
+        """
+
         self.h2_volume_mL = _clamp(
             self.h2_volume_mL,
             EMS_LIMITS.pem.h2_min_usable_mL,
@@ -595,6 +718,10 @@ class EMSState:
         self.pem_soc = self.h2_usable_soc
 
     def update_hydrogen_from_current(self, dt_seconds):
+        """
+        Updates the hydrogen state based on the current and time step, using Coulomb integration.
+        """
+
         if dt_seconds <= 0:
             return
 
@@ -619,6 +746,10 @@ class EMSState:
         self.h2_last_delta_mL = self.h2_volume_mL - old_h2_volume
 
     def set_hydrogen_soc(self, soc_percent):
+        """
+        Sets the state of charge for the hydrogen storage based on a percentage,
+        """
+
         self.pem_soc = _clamp(float(soc_percent), 0.0, 100.0)
         self.h2_volume_mL = _h2_volume_from_soc(self.pem_soc)
         self.sync_hydrogen_state()
@@ -629,6 +760,11 @@ class EMSState:
             self.h2_mode = "manual"
 
     def apply_scheduler_decision(self, scenario, reason):
+        """
+        Applies a new scenario decision from the scheduler with a reason, 
+        updating the current decision state.
+        """
+
         scenario = max(1, min(6, int(scenario)))
 
         self.target_scenario = scenario
@@ -656,6 +792,10 @@ class EMSState:
         self.last_decision_update = time.strftime("%Y-%m-%d %H:%M:%S")
 
     def apply_manual_scenario(self, scenario):
+        """
+        Applies a manual scenario selection from the WebUI
+        """
+
         scenario = max(1, min(6, int(scenario)))
 
         self.control_mode = "manual"
@@ -673,6 +813,10 @@ class EMSState:
         }
 
     def apply_manual_mode_decision(self):
+        """
+        Applies a decision state for when the manual mode is active.
+        """
+
         if not self.current_decision:
             self.current_decision = {
                 "slot": self.current_slot,
@@ -684,6 +828,11 @@ class EMSState:
             }
 
     def to_component_state(self):
+        """
+        Returns a dictionary representation of the current EMS state
+        for use by other components or the UI.
+        """
+
         return {
             "demand_mW": self.current_demand_mW,
             "pv_voltage_V": self.panel_voltage,

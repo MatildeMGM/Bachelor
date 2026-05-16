@@ -1,34 +1,57 @@
+"""
+File: scheduler.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script defines the scheduler logic for deciding the appropriate scenario
+    based on the current system state and market conditions.
+  
+Authors:
+    Jacob Norman Sørensen
+    Matilde Marie Grønkjær Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 from ems_limits import EMS_LIMITS
 
 
 @dataclass(frozen=True)
 class SchedulerInputs:
+    """
+    Data class representing the input parameters for the EMS scheduler decision logic.
+    """
     price_state: str
     pv_available: bool
     battery_soc: float
     pem_soc: float
     battery_voltage_V: float = 0.0
 
-    # Current load demand from the demand profile, in mW.
-    # This is needed so the scheduler can prevent S6 when the load is too high
-    # for the PEM.
-    #
-    # Default is set to the maximum load demand so that, if older code forgets
-    # to pass this value, the scheduler safely avoids using the PEM.
     load_demand_mW: float = EMS_LIMITS.demand.max_demand_power_mW
 
 
 @dataclass(frozen=True)
 class SchedulerDecision:
+    """
+    Data class representing the output of the EMS scheduler decision logic.
+    """
     scenario: int
     reason: str
 
 
 def decide_scenario(inputs: SchedulerInputs) -> SchedulerDecision:
+    """
+    Determines the appropriate EMS scenario based on the current system state and price conditions. 
+    """
     price_state = str(inputs.price_state).upper()
 
     low_price = price_state == "LOW"

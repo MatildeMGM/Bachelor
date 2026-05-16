@@ -1,7 +1,27 @@
+"""
+File: ui.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script defines the user interface logic for the EMS application, 
+    including the WebUI setup and the handling of incoming messages from the frontend. 
+  
+Authors:
+    Jacob Norman Sørensen
+    Matilde Marie Grønkjær Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from __future__ import annotations
-
 from arduino.app_bricks.web_ui import WebUI
-
 from config import DEFAULT_PRICE_ZONE, VALID_PRICE_ZONES
 from ems_state import known_clients, state, state_lock
 
@@ -10,6 +30,10 @@ ui = WebUI()
 
 
 def _ensure_optional_state_attributes():
+    """
+    Ensures that all optional attributes in the EMS state are initialized to default values.
+    """
+
     if not hasattr(state, "ems_enabled"):
         state.ems_enabled = False
 
@@ -51,13 +75,14 @@ def _ensure_optional_state_attributes():
 
 
 def build_payload():
+    """
+    Builds the payload dictionary which is sent to the UI. 
+    """
+
     _ensure_optional_state_attributes()
 
     status = dict(state.arduino_status or {})
 
-    # Remove legacy/raw battery keys from the UI payload to avoid accidental
-    # frontend fallback between old Arduino names and the new realBattery* names.
-    # The real battery values are re-added below with explicit names.
     for key in (
         "batterySOC",
         "batteryCharge_mAh",
@@ -72,8 +97,6 @@ def build_payload():
     ):
         status.pop(key, None)
 
-    # Add EMS-standardised measurement fields. The Arduino may still expose
-    # original A/W fields, but the EMS/UI uses mA, mW and V.
     status["PVcurrent_mA"] = state.pv_current
     status["Batcurrent_mA"] = state.battery_current
     status["PEMcurrent_mA"] = state.pem_current
@@ -84,7 +107,6 @@ def build_payload():
     status["PEMpower_mW"] = state.pem_power
     status["Loadpower_mW"] = state.load_power
 
-    # Real battery estimate from the Arduino safety layer.
     status["realBatterySOC"] = state.real_battery_soc
     status["realBatteryCharge_mAh"] = state.real_battery_charge_mAh
     status["realBatteryCapacity_mAh"] = state.real_battery_capacity_mAh
@@ -97,7 +119,6 @@ def build_payload():
     status["realBatteryLookupVoltageMin"] = state.real_battery_lookup_voltage_min
     status["realBatteryLookupVoltageMax"] = state.real_battery_lookup_voltage_max
 
-    # Virtual battery model used by the scaled EMS demo.
     status["virtualBatterySOC"] = state.battery_soc
     status["virtualBatteryCharge_mAh"] = state.battery_charge_mah
     status["virtualBatteryCapacity_mAh"] = state.battery_virtual_capacity_mah
@@ -181,6 +202,10 @@ def build_payload():
 
 
 def publish_state():
+    """
+    Publishes the current EMS state to the UI.
+    """
+
     with state_lock:
         payload = build_payload()
 
@@ -192,6 +217,10 @@ def send_telemetry():
 
 
 def on_state_request(client_id, data):
+    """ 
+    Handles incoming state request messages from the UI.
+    """
+
     known_clients.add(client_id)
 
     with state_lock:
@@ -202,6 +231,10 @@ def on_state_request(client_id, data):
 
 
 def on_price_control(client_id, data):
+    """ 
+    Handles incoming price control messages from the UI.
+    """
+    
     known_clients.add(client_id)
 
     data = data or {}
@@ -313,11 +346,19 @@ def on_price_control(client_id, data):
 
 
 def api_status():
+    """
+    API endpoint handler for fetching the current EMS status. 
+    """
+
     with state_lock:
         return build_payload()
 
 
 def setup_ui():
+    """
+    Sets up the WebUI with API endpoints.
+    """
+
     ui.expose_api("GET", "/api/status", api_status)
     ui.on_message("state_request", on_state_request)
     ui.on_message("price_control", on_price_control)
