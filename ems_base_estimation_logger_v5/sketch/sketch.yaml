@@ -1,9 +1,10 @@
 profiles:
   default:
-    fqbn: 
+    fqbn:
     platforms:
       - platform: arduino:zephyr
     libraries:
       - INA226_WE (1.3.0)
+      - Arduino_RouterBridge (0.3.0)
 
 default_profile: default
