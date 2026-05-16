@@ -1,3 +1,27 @@
+"""
+File: ems_loop.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    The main control loop for the EMS application. It periodically updates 
+    the current price and demand inputs, fetches the latest measurements from 
+    the Arduino, runs the scheduling logic to decide on the optimal scenario, 
+    sends control commands to the Arduino, and logs the relevant data for analysis.  
+
+Authors:
+    Jacob Norman Sørensen
+    Matilde Marie Grønkjær Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from __future__ import annotations
 
 import csv
@@ -151,6 +175,10 @@ logged_slots = set()
 
 
 def ensure_ems_attributes():
+    """
+    Ensure that all expected EMS state attributes exist before logging or UI updates.
+    """
+
     if not hasattr(state, "ems_enabled"):
         state.ems_enabled = False
 
@@ -189,16 +217,28 @@ def ensure_ems_attributes():
 
 
 def get_now():
+    """
+    Returns the current date and time.
+    """
+
     return datetime.now(DK_TZ)
 
 
 def slot_to_time_label(slot):
+    """ 
+    Convert a slot number in HH:MM format.    
+    """
+
     hour = slot // 4
     minute = (slot % 4) * 15
     return f"{hour:02d}:{minute:02d}"
 
 
 def slot_to_interval_label(slot):
+    """ 
+    Convert a slot number to a time interval label in HH:MM-HH:MM format.    
+    """
+
     start_hour = slot // 4
     start_minute = (slot % 4) * 15
 
@@ -214,10 +254,18 @@ def slot_to_interval_label(slot):
 
 
 def make_fallback_prices():
+    """
+    Returns a fallback price list with a constant price, used when the price fetch fails.
+    """
+
     return [0.50] * 96
 
 
 def update_demo_time():
+    """
+    Updates the demo time based on the elapsed time since the demo started.
+    """
+
     if not state.demo_running:
         state.current_time_label = slot_to_time_label(state.current_slot)
         state.current_interval_label = slot_to_interval_label(state.current_slot)
@@ -247,6 +295,10 @@ def update_demo_time():
 
 
 def update_current_inputs():
+    """
+    Updates the current inputs based on the latest available data.
+    """
+    
     update_demo_time()
 
     if state.price_mode != "manual":
@@ -260,6 +312,10 @@ def update_current_inputs():
 
 
 def refresh_prices():
+    """
+    Refreshes the price data for the current date.
+    """
+
     try:
         state.prices = fetch_prices_for_date(
             zone=state.price_zone,
@@ -274,6 +330,10 @@ def refresh_prices():
 
 
 def refresh_demand_profile():
+    """
+    Refreshes the demand profile data for the current date.
+    """
+
     try:
         state.demand_profile = load_demand_profile()
         state.last_error = ""
@@ -285,12 +345,20 @@ def refresh_demand_profile():
 
 
 def refresh_inputs():
+    """
+    Refreshes all input data for the current date.
+    """
+
     refresh_prices()
     refresh_demand_profile()
     update_current_inputs()
 
 
 def update_state_from_arduino(dt_seconds):
+    """
+    Updates the state based on the latest data from the Arduino.
+    """
+
     status = fetch_arduino_status()
     state.apply_arduino_status(status)
     state.update_real_battery_from_current(dt_seconds)
@@ -305,6 +373,10 @@ def update_state_from_arduino(dt_seconds):
 
 
 def run_scheduler():
+    """
+    Runs the scheduler to determine the optimal scenario based on current conditions.
+    """
+
     decision = decide_scenario(
         SchedulerInputs(
             price_state=state.price_state,
@@ -320,6 +392,10 @@ def run_scheduler():
 
 
 def maybe_send_auto_scenario():
+    """
+    Sends the auto scenario to the MCU if the conditions are met.
+    """
+    
     if not state.ems_enabled:
         return
 
@@ -342,6 +418,10 @@ def maybe_send_auto_scenario():
 
 
 def write_log_row(path, fieldnames, row):
+    """
+    Writes a single row of data to the specified log file in CSV format.
+    """
+
     if not path:
         return
 
@@ -350,6 +430,10 @@ def write_log_row(path, fieldnames, row):
         writer.writerow(row)
 
 def start_demo_log():
+    """
+    Initializes the demo log by creating a new CSV file.
+    """
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     filename = "ems_demo_{}.csv".format(get_now().strftime("%Y%m%d_%H%M%S"))
@@ -365,6 +449,10 @@ def start_demo_log():
 
 
 def start_raw_log():
+    """
+    Initializes the raw log by creating a new CSV file.
+    """
+
     ensure_ems_attributes()
 
     if state.raw_log_running:
@@ -387,6 +475,10 @@ def start_raw_log():
 
 
 def stop_raw_log():
+    """
+    Stops the raw log and updates the state.
+    """
+
     ensure_ems_attributes()
 
     state.raw_log_running = False
@@ -395,6 +487,10 @@ def stop_raw_log():
 
 
 def log_raw_sample():
+    """
+    Logs a single sample to the raw log file.
+    """
+
     ensure_ems_attributes()
 
     if not state.raw_log_running:
@@ -472,6 +568,10 @@ def log_raw_sample():
 
 
 def handle_raw_log_requests():
+    """
+    Handles requests to start or stop the raw log.
+    """
+
     ensure_ems_attributes()
 
     if state.raw_log_start_requested:
@@ -485,12 +585,8 @@ def handle_raw_log_requests():
 
 
 def reset_system_to_initial_state():
-    """Reset the EMS/UI state to a safe initial state.
-
-    This is intentionally stronger than a price/demand refresh. It stops the
-    demo and logging state, clears the plot history, resets the virtual storage
-    estimates, returns the UI to the initial timeline, and asks the Arduino to
-    move the relay system back to safe standby S1 with the load trigger off.
+    """
+    Reset the EMS/UI state to a safe initial state.
     """
 
     state.ems_enabled = False
@@ -565,6 +661,10 @@ def reset_system_to_initial_state():
 
 
 def start_ems():
+    """
+    Starts the EMS system and applies state based on the Arduino status.
+    """
+
     state.ems_enabled = True
     state.ems_status = "running"
     state.control_mode = "manual"
@@ -593,6 +693,10 @@ def start_ems():
 
 
 def stop_ems():
+    """
+    Stops the EMS system and applies safe standby scenario.
+    """
+
     state.ems_enabled = False
     state.ems_status = "standby"
 
@@ -621,6 +725,10 @@ def stop_ems():
 
 
 def start_demo():
+    """
+    Starts the demo and logging.
+    """
+
     if not state.ems_enabled:
         state.demo_running = False
         state.reason = "Start EMS system before starting the demo."
@@ -658,6 +766,10 @@ def start_demo():
 
 
 def stop_demo():
+    """
+    Stops the demo and logging.
+    """
+
     state.demo_running = False
     state.last_log_update = "Demo stopped at " + get_now().isoformat(timespec="seconds")
 
@@ -669,6 +781,9 @@ def stop_demo():
 
 
 def complete_demo_cycle():
+    """
+    Completes the demo cycle, resets the state, and applying safe standby scenario.
+    """
     state.demo_running = False
     state.demo_start_requested = False
     state.demo_stop_requested = False
@@ -693,6 +808,10 @@ def complete_demo_cycle():
 
 
 def log_current_slot():
+    """
+    Logs the current slot information to the log file.
+    """
+
     if not state.demo_running:
         return
 
@@ -775,6 +894,10 @@ def log_current_slot():
 
 
 def handle_reset_requests():
+    """
+    Handles requests to reset the EMS system to the initial safe state.
+    """
+
     ensure_ems_attributes()
 
     if state.reset_requested:
@@ -786,6 +909,10 @@ def handle_reset_requests():
 
 
 def handle_ems_requests():
+    """
+    Handles requests to start or stop the EMS system.
+    """
+
     if state.ems_stop_requested:
         state.ems_stop_requested = False
         stop_ems()
@@ -797,6 +924,10 @@ def handle_ems_requests():
 
 
 def handle_demo_requests():
+    """
+    Handles requests to start or stop the demo.
+    """
+
     if state.demo_start_requested:
         state.demo_start_requested = False
         start_demo()
@@ -807,6 +938,12 @@ def handle_demo_requests():
 
 
 def ems_loop():
+    """
+    The main loop of the EMS application. 
+    It periodically updates inputs, fetches data from the Arduino, 
+    runs the scheduler, sends commands to the Arduino, and logs data.
+    """ 
+
     ensure_ems_attributes()
 
     state.demo_enabled = DEMO_ENABLED
@@ -870,6 +1007,10 @@ def ems_loop():
 
 
 def set_manual_scenario(scenario):
+    """
+    Sets the manual scenario for the EMS system.
+    """
+
     with state_lock:
         ensure_ems_attributes()
 
@@ -892,6 +1033,10 @@ def set_manual_scenario(scenario):
 
 
 def set_manual_relay(relay, output_state):
+    """
+    Sets the manual relay state for the EMS system.
+    """
+    
     with state_lock:
         ensure_ems_attributes()
 
