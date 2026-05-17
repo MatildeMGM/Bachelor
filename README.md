@@ -1,14 +1,45 @@
-# Bachelor
-We aim to build a model that controls an Energy Management System (EMS) in a smart way, ensuring supply of demand and avoiding grid during high prices .
+# Bachelor Thesis Repository
 
+This repository accompanies the bachelor thesis:
 
+**Investigation of reversible electrolyzers and implementation of energy management control strategies through IoT embedded microcontroller**
 
+Technical University of Denmark (DTU), 2026  
+Authors: Jacob Norman Sorensen and Matilde Marie Grønkjær Matell
 
+## Purpose
 
-#Teknisk
+The repository contains the code, experimental data, analysis files, and supporting material used to develop and evaluate a lab-scale Energy Management System (EMS). The EMS controls power flow between grid, photovoltaic source, battery, reversible PEM fuel cell/electrolyzer, and load by selecting between predefined operating scenarios.
 
-Command til at køre .venv/ er under: 
+## Repository Overview
 
-python -m venv .venv
-#aktiver environment: .\.venv\Scripts\activate
-pip install -r requirements.txt
+- `EMS Control App/` contains the final Arduino UNO Q application. This is the main implementation used for EMS monitoring, scenario control, WebUI interaction, and logging.
+- `EMS Control App/sketch/` contains the Arduino sketch for relay control, INA226 measurements, scenario application, and embedded safety checks.
+- `EMS Control App/python/` contains the Python supervisory EMS logic, including the control loop, scheduler, state handling, Arduino bridge, and system limits.
+- `EMS Control App/assets/` contains the WebUI used for live monitoring and manual/demo control.
+- `data/` contains experimental measurements from battery, PEM/RFC, PV, EMS system, demand profile, and sensor tests.
+- `control_parameters_new/` contains notebooks and scripts used to derive control parameters for the final EMS implementation.
+- `Arduino_IDE_files/` contains supporting Arduino sketches for the controllable load used during development and testing.
+- `requirements.txt` lists Python dependencies used for analysis and supporting scripts.
+
+## Submitted Archives
+
+Two archives are intended for submission with the thesis:
+
+- `EMS_Control_App.zip`: contains only `EMS Control App/` and is intended for upload to the Arduino App Lab interface.
+- `Bachelor_repository.zip`: contains the full repository, including the EMS application, analysis files, experimental data, and supporting Arduino code.
+
+Generated or local development folders such as `.git/`, `.venv/`, and `__pycache__/` are not part of the intended archival content.
+
+## Responsible Use of AI
+
+AI-assisted tools were used during parts of the project as support for language refinement, documentation structure, coding assistance, and debugging. The authors remain responsible for the submitted work, including the implementation, experimental interpretation, analysis choices, and final thesis conclusions.
+
+AI-generated suggestions were reviewed, adapted, and verified by the authors before inclusion. AI tools were not treated as primary sources for scientific claims; factual claims should be traceable to the thesis references, measured data, or the repository contents.
+
+This declaration follows DTU's emphasis on honesty, transparency, and accountability in academic work, as described in DTU's Code of Honour and DTU Library guidance on referencing the use of generative AI.
+
+Relevant DTU guidance:
+
+- DTU Code of Honour: <https://student.dtu.dk/en/eksamen/eksamenssnyd/dtu-code-of-honour>
+- DTU Library, referencing generative AI: <https://www.bibliotek.dtu.dk/en/publishing/reference-management/kunstig-intelligens>
