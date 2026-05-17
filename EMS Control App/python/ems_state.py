@@ -132,24 +132,7 @@ def _virtual_battery_voltage_for_current(battery_voltage=0.0):
     return voltage
 
 
-BATTERY_SOC_LOOKUP_POINTS = (
-    (0.0, 0.5 * (3.2256 + 3.03315)),
-    (2.0, 0.5 * (3.5411 + 3.5124)),
-    (5.0, 0.5 * (3.70655 + 3.7214)),
-    (10.0, 0.5 * (3.7299 + 3.7698)),
-    (15.0, 0.5 * (3.7669 + 3.8077)),
-    (20.0, 0.5 * (3.7970 + 3.8366)),
-    (30.0, 0.5 * (3.82345 + 3.8655)),
-    (40.0, 0.5 * (3.8521 + 3.8890)),
-    (50.0, 0.5 * (3.8974 + 3.9229)),
-    (60.0, 0.5 * (3.9507 + 3.9803)),
-    (70.0, 0.5 * (4.0195 + 4.0560)),
-    (80.0, 0.5 * (4.1133 + 4.1396)),
-    (90.0, 0.5 * (4.21845 + 4.2348)),
-    (95.0, 0.5 * (4.2793 + 4.2858)),
-    (98.0, 0.5 * (4.3194 + 4.3210)),
-    (100.0, 0.5 * (4.3463 + 4.35825)),
-)
+BATTERY_SOC_LOOKUP_POINTS = EMS_LIMITS.battery.voltage_soc_curve
 
 
 def _real_battery_capacity_mAh():
@@ -171,8 +154,8 @@ def _estimate_real_battery_soc_from_voltage(voltage):
     if voltage is None:
         return None
 
-    first_soc, first_voltage = BATTERY_SOC_LOOKUP_POINTS[0]
-    last_soc, last_voltage = BATTERY_SOC_LOOKUP_POINTS[-1]
+    first_voltage, first_soc = BATTERY_SOC_LOOKUP_POINTS[0]
+    last_voltage, last_soc = BATTERY_SOC_LOOKUP_POINTS[-1]
 
     if voltage < first_voltage or voltage > last_voltage:
         return None
@@ -183,7 +166,7 @@ def _estimate_real_battery_soc_from_voltage(voltage):
     if voltage == last_voltage:
         return last_soc
 
-    for (soc0, v0), (soc1, v1) in zip(
+    for (v0, soc0), (v1, soc1) in zip(
         BATTERY_SOC_LOOKUP_POINTS,
         BATTERY_SOC_LOOKUP_POINTS[1:],
     ):
@@ -207,7 +190,7 @@ def _real_battery_voltage_inside_lookup_range(voltage):
     if voltage is None:
         return False
 
-    return BATTERY_SOC_LOOKUP_POINTS[0][1] <= voltage <= BATTERY_SOC_LOOKUP_POINTS[-1][1]
+    return BATTERY_SOC_LOOKUP_POINTS[0][0] <= voltage <= BATTERY_SOC_LOOKUP_POINTS[-1][0]
 
 
 def _real_battery_charge_state(soc_percent, initialized=True):
@@ -334,8 +317,8 @@ class EMSState:
         self.real_battery_soc_status = "waiting_for_initial_soc"
         self.real_battery_initial_lookup_voltage = None
         self.real_battery_lookup_soc_percent = None
-        self.real_battery_lookup_voltage_min = BATTERY_SOC_LOOKUP_POINTS[0][1]
-        self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][1]
+        self.real_battery_lookup_voltage_min = BATTERY_SOC_LOOKUP_POINTS[0][0]
+        self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][0]
         self.real_battery_last_update_monotonic = None
 
         self.real_battery_energy_wh = 0.0
@@ -408,8 +391,8 @@ class EMSState:
         self.real_battery_lookup_soc_percent = _estimate_real_battery_soc_from_voltage(
             self.battery_voltage
         )
-        self.real_battery_lookup_voltage_min = BATTERY_SOC_LOOKUP_POINTS[0][1]
-        self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][1]
+        self.real_battery_lookup_voltage_min = BATTERY_SOC_LOOKUP_POINTS[0][0]
+        self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][0]
 
         self.mode = str(self.arduino_status.get("mode", ""))
 
@@ -645,8 +628,8 @@ class EMSState:
         self.real_battery_soc_status = "waiting_for_initial_soc"
         self.real_battery_initial_lookup_voltage = None
         self.real_battery_lookup_soc_percent = None
-        self.real_battery_lookup_voltage_min = BATTERY_SOC_LOOKUP_POINTS[0][1]
-        self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][1]
+        self.real_battery_lookup_voltage_min = BATTERY_SOC_LOOKUP_POINTS[0][0]
+        self.real_battery_lookup_voltage_max = BATTERY_SOC_LOOKUP_POINTS[-1][0]
         self.real_battery_last_update_monotonic = None
         self.real_battery_energy_wh = 0.0
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+
 @dataclass(frozen=True)
 class PriceLimits:
     """
@@ -92,19 +93,22 @@ class BatteryLimits:
     min_load_voltage_after_apply_V: float = 3.0
 
     voltage_soc_curve: tuple[tuple[float, float], ...] = (
-        (2.98, 0.0),
-        (3.20, 1.0),
-        (3.40, 3.0),
-        (3.60, 6.0),
-        (3.72, 8.0),
-        (3.78, 12.0),
-        (3.83, 20.0),
-        (3.88, 40.0),
-        (3.92, 50.0),
-        (3.98, 60.0),
-        (4.05, 70.0),
-        (4.12, 80.0),
-        (4.20, 100.0),
+        (3.1294, 0.0),
+        (3.5267, 2.0),
+        (3.7140, 5.0),
+        (3.7498, 10.0),
+        (3.7873, 15.0),
+        (3.8168, 20.0),
+        (3.8445, 30.0),
+        (3.8705, 40.0),
+        (3.9101, 50.0),
+        (3.9655, 60.0),
+        (4.0377, 70.0),
+        (4.1265, 80.0),
+        (4.2266, 90.0),
+        (4.2826, 95.0),
+        (4.3202, 98.0),
+        (4.3523, 100.0),
     )
 
 @dataclass(frozen=True)
@@ -127,8 +131,8 @@ class PEMLimits:
     h2_max_mL: float = 15.6
     h2_min_usable_mL: float = 7.6
 
-    h2_charge_mL_per_C: float = 0.104095
-    h2_discharge_mL_per_C: float = 0.25175648
+    h2_charge_mL_per_C: float = 0.101
+    h2_discharge_mL_per_C: float = 0.248
 
     min_discharge_soc: float = 10.0
 
@@ -142,11 +146,11 @@ class SafetyLimits:
     Stores the absolute voltage, current, and power safety limits used by the EMS.
     """
 
-    absolute_min_battery_voltage_V: float = 3.03315
-    absolute_max_battery_voltage_V: float = 4.34630
+    absolute_min_battery_voltage_V: float = 3.00
+    absolute_max_battery_voltage_V: float = 4.30
 
-    absolute_min_pem_voltage_V: float = 0.54975
-    absolute_max_pem_voltage_V: float = 2.20
+    absolute_min_pem_voltage_V: float = 0.55
+    absolute_max_pem_voltage_V: float = 1.90
 
     max_current_mA: float = 500.0
     max_power_mW: float = 500.0
