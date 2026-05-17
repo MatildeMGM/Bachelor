@@ -1,0 +1,5 @@
+test,scenario_match_percent,actual_scenario_changes,one_slot_actual_runs,served_demand_percent,unmet_load_energy_mWh,grid_share_of_demand_percent,high_price_grid_share_percent,cost_reduction_vs_all_grid_percent,pv_used_when_available_percent,s6_slots,s6_served_demand_percent,s6_mean_pem_output_mW,s6_mean_demand_mW,battery_soc_change_percent_point,pem_soc_change_percent_point,h2_change_mL
+TEST1,97.92,6.0,2.0,98.4,16.03,85.0,100.0,4.9,100.0,0.0,,,,15.05,49.91,3.99
+TEST2,97.92,5.0,1.0,96.98,30.36,16.07,16.07,78.56,100.0,4.0,45.87,13.63,36.09,-10.03,-3.04,-0.24
+TEST3,96.88,4.0,1.0,94.3,57.21,72.08,72.08,27.39,,35.0,80.06,22.78,27.38,-2.01,-55.19,-4.42
+TEST4,94.79,8.0,2.0,99.08,9.28,38.76,5.75,90.88,100.0,0.0,,,,-12.56,22.6,1.81
