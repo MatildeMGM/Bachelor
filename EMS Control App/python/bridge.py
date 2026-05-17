@@ -31,7 +31,6 @@ from arduino.app_utils import Bridge
 from config import BRIDGE_TIMEOUT, DK_TZ
 from ems_state import state
 
-
 def get_now():
     """
     Returns the current date and time as a formatted timestamp string for logging or status messages.

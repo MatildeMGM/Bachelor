@@ -1,6 +1,0 @@
-name: EMS_base_estimation_logger_v5
-description: 24min testing and demand profile 15-75mW and PEM limited to below 40mW
-ports: []
-bricks:
-- arduino:web_ui: {}
-icon: 🖥️

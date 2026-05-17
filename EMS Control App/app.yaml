@@ -1,0 +1,6 @@
+name: EMS Control App
+description: Arduino UNO Q app for monitoring and controlling the lab-scale EMS setup.
+ports: []
+bricks:
+- arduino:web_ui: {}
+icon: 🖥️
