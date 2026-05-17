@@ -1,0 +1,6 @@
+Simulated time,Timeslot,Scenario,EMS reason
+00:00,00:00-00:15,S5,"HIGH price, PV unavailable and battery has energy -> battery supplies load."
+06:15,06:15-06:30,S4,HIGH price and PV available -> PV supplies load.
+18:45,18:45-19:00,S5,"HIGH price, PV unavailable and battery has energy -> battery supplies load."
+19:45,19:45-20:00,S1,"HIGH price, but load demand is too high for PEM (60.4 mW >= 40.0 mW) -> grid supplies load."
+22:45,22:45-23:00,S6,"HIGH price, PV unavailable, battery low, PEM has usable hydrogen and load demand is below 40 mW -> PEM supplies load."
