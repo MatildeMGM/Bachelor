@@ -112,7 +112,7 @@ def fetch_arduino_status():
 
 def push_price_to_mcu():
     """
-    Sends the current price information to the Arduino microcontroller.
+    Sends the current price information to the Arduino.
     """
 
     payload = "PRICE,{price:.5f},{slot}".format(
@@ -128,7 +128,7 @@ def push_price_to_mcu():
 
 def push_scenario_to_mcu(command):
     """
-    Sends the selected EMS scenario command to the Arduino microcontroller.
+    Sends the selected EMS scenario command to the Arduino.
     """
 
     if not command:
@@ -142,7 +142,7 @@ def push_scenario_to_mcu(command):
 
 def push_manual_scenario_to_mcu(command):
     """
-    Sends a manual override scenario command to the Arduino microcontroller, prefixed to indicate it's a manual scenario.
+    Sends a manual override scenario command to the Arduino, prefixed to indicate it's a manual scenario.
     """
 
     if not command:
@@ -158,7 +158,7 @@ def push_manual_scenario_to_mcu(command):
 
 def push_relay_to_mcu(relay, output_state):
     """
-    Sends a command to the Arduino microcontroller to set the state of a specific relay (K1-K7) based on the provided output state.
+    Sends a command to the Arduino to set the state of a specific relay (K1-K7) based on the provided output state.
     """
 
     relay_name = str(relay).upper()
@@ -173,7 +173,7 @@ def push_relay_to_mcu(relay, output_state):
 
 def push_load_trigger_to_mcu(active):
     """
-    Sends a command to the Arduino microcontroller to set the state of the load trigger based on the provided active state.
+    Sends a command to the Arduino to set the state of the load trigger based on the provided active state.
     """
 
     value = 1 if active else 0
