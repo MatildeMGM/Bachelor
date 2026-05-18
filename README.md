@@ -5,7 +5,7 @@ This repository accompanies the bachelor thesis:
 **Investigation of reversible electrolyzers and implementation of energy management control strategies through IoT embedded microcontroller**
 
 Technical University of Denmark (DTU), 2026  
-Authors: Jacob Norman Sorensen and Matilde Marie Grønkjær Matell
+Authors: Jacob Norman Sørensen and Matilde Marie Grønkjær Matell
 
 ## Purpose
 
@@ -19,7 +19,7 @@ The repository contains the code, experimental data, analysis files, and support
 - `EMS Control App/assets/` contains the WebUI used for live monitoring and manual/demo control.
 - `data/` contains experimental measurements from battery, PEM/RFC, PV, EMS system, demand profile, and sensor tests.
 - `control_parameters_new/` contains notebooks and scripts used to derive control parameters for the final EMS implementation.
-- `Arduino_IDE_files/` contains supporting Arduino sketches for the controllable load used during development and testing.
+- `Arduino_IDE_files/` contains supporting Arduino sketches for the controllable load used during development and testing, and code for the uno Nano, which was written in the previous bachelor project.
 - `requirements.txt` lists Python dependencies used for analysis and supporting scripts.
 
 ## Submitted Archives
