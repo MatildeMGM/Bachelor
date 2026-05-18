@@ -1,4 +1,26 @@
 <!doctype html>
+<!--
+  File: index.html
+
+  Description:
+    This file is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This file defines the browser-based EMS dashboard layout. The dashboard
+    presents live system status, control buttons, price and demand information,
+    scenario selection, battery and hydrogen state, and measurement tables.
+
+  Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+  Institution:
+    Technical University of Denmark (DTU)
+
+  Date:
+    2026-05-18
+-->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -8,6 +30,7 @@
 </head>
 
 <body>
+  <!-- Dashboard title and connection status shown at the top of the UI. -->
   <header class="hero">
     <div>
       <h1>EMS Dashboard</h1>
@@ -21,6 +44,7 @@
   </header>
 
   <main>
+    <!-- Main control panel for EMS mode, demo execution, logging and manual inputs. -->
     <section class="card controls">
       <div class="section-title-row">
         <div>

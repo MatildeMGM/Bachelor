@@ -1,3 +1,28 @@
+/*
+  File: app.js
+
+  Description:
+    This file is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script runs the browser-side logic for the EMS dashboard. It receives
+    live state updates from the Python EMS through a Socket.IO connection,
+    renders measurements and timeline plots, and sends user control actions
+    back to the EMS backend.
+
+  Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+  Institution:
+    Technical University of Denmark (DTU)
+
+  Date:
+    2026-05-18
+*/
+
+/* Socket.IO state and cached values used while rendering live EMS data. */
 let socket = null;
 let latest = null;
 
@@ -28,6 +53,7 @@ const scenarioColors = {
   6: "rgba(244, 63, 94, 0.15)"
 };
 
+/* Colour definitions used by the timeline and live power curves. */
 const lineColors = {
   price: "#22c55e",
   threshold: "rgba(34,197,94,0.50)",
@@ -38,6 +64,7 @@ const lineColors = {
   pem: "#3b82f6"
 };
 
+/* Local 96-slot history used when backend history is not yet available. */
 const localHistory = {
   cycle: null,
   pv_power_mW: Array(96).fill(null),
@@ -47,6 +74,7 @@ const localHistory = {
   scenario: Array(96).fill(null)
 };
 
+/* Formatting, parsing and DOM helper functions. */
 function $(id) {
   return document.getElementById(id);
 }
@@ -213,6 +241,7 @@ function getActualScenario(data) {
   );
 }
 
+/* Timeline data preparation for the 96-slot EMS demo day. */
 function getControlMode(data) {
   const control = getControl(data);
   return control.control_mode || data.control_mode || "-";
@@ -400,6 +429,7 @@ function drawHorizontalLine(ctx, value, mapY, x0, x1, color, label) {
   ctx.restore();
 }
 
+/* Draws the combined price, demand, power and scenario timeline canvas. */
 function drawTimeline(data) {
   const canvas = $("emsTimeline");
   if (!canvas) return;
@@ -576,6 +606,7 @@ function signedLiveValueAtCurrent(data, primaryKey, fallbackKey, localKey, stora
   return signedStoragePowerMw(value, scenario, storageType);
 }
 
+/* Rendering functions for dashboard summaries, measurements and controls. */
 function renderTimelineSummary(data) {
   const status = getStatus(data);
   const hydrogen = getHydrogen(data);
@@ -812,6 +843,7 @@ function realBatteryDisplayValues({
   };
 }
 
+/* Main render function called whenever a new EMS state snapshot is received. */
 function render(data) {
   latest = data;
 
@@ -1024,6 +1056,7 @@ function render(data) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  /* Socket.IO event handlers keep the dashboard connected to the Python EMS backend. */
   socket = io();
 
   socket.on("connect", () => {
@@ -1037,6 +1070,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   socket.on("telemetry", render);
 
+  /* Button handlers send high-level control actions to the Python EMS backend. */
   document.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", () => flashButton(button));
   });

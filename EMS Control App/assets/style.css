@@ -1,3 +1,27 @@
+/*
+  File: style.css
+
+  Description:
+    This file is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This stylesheet defines the visual presentation of the EMS dashboard,
+    including the dark interface theme, responsive layout, control panels,
+    scenario buttons, measurement tables and timeline visualisation.
+
+  Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+  Institution:
+    Technical University of Denmark (DTU)
+
+  Date:
+    2026-05-18
+*/
+
+/* Global theme variables used throughout the dashboard interface. */
 :root {
   color-scheme: dark;
   --bg: #0f172a;
@@ -23,6 +47,7 @@ body {
   color: var(--text);
 }
 
+/* Page shell and top dashboard header. */
 .hero,
 main {
   max-width: 1280px;
@@ -58,6 +83,7 @@ main {
   padding: 0 1rem 2rem;
 }
 
+/* Reusable dashboard card and status badge styling. */
 .card {
   background: rgba(17, 28, 51, 0.92);
   border: 1px solid var(--line);
@@ -100,6 +126,7 @@ main {
   justify-content: flex-end;
 }
 
+/* Layout grids for the EMS controls, inputs and dashboard sections. */
 .controls {
   display: grid;
   gap: 1rem;
@@ -151,6 +178,7 @@ select {
   padding: 0.65rem 0.75rem;
 }
 
+/* Buttons used for EMS operation, logging and manual scenario control. */
 .button-row,
 .scenario-grid {
   display: flex;
@@ -207,6 +235,7 @@ select {
   border-color: var(--line);
 }
 
+/* Status values, decision text and tabular measurement readouts. */
 .kpi span {
   color: var(--muted);
   display: block;
@@ -250,6 +279,7 @@ td {
   word-break: break-word;
 }
 
+/* Timeline canvas, legend and live history summary. */
 .chart-wrap {
   width: 100%;
   overflow-x: auto;
@@ -340,6 +370,7 @@ td {
   font-weight: 650;
 }
 
+/* Responsive layout rules for tablet and mobile screen widths. */
 @media (max-width: 1100px) {
   .control-grid.three,
   .control-grid.four {
