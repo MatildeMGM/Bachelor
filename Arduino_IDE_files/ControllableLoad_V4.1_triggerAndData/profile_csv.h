@@ -1,6 +1,7 @@
 #pragma once
 
 // Generated from scaled_may_power_profile_15min.csv
+// Generated date: 2026-05-12
 // Columns: time_slot,time_of_day,power_mW
 // The main .ino parser reads the last column as power_mW.
 

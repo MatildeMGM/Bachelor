@@ -1,3 +1,27 @@
+"""
+File: thresholds_prices.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script analyses historical spot price data and calculates the price
+    threshold used to classify EMS operation into low-price and high-price
+    periods. The resulting threshold supports the scheduler configuration in
+    the EMS application.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +34,10 @@ PRICE_COLUMN = "SpotPriceDKK"
 
 
 def load_spot_prices(csv_path, price_column):
+    """
+    Loads spot prices from the historical CSV file and converts DKK/MWh to DKK/kWh.
+    """
+
     data = pd.read_csv(csv_path, sep=";")
 
     if price_column not in data.columns:

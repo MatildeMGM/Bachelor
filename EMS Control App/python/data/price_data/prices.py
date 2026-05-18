@@ -1,3 +1,27 @@
+"""
+File: prices.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script fetches day-ahead electricity prices for the selected Danish
+    price area and converts the returned DKK/MWh values to DKK/kWh. The EMS
+    application uses the resulting 96 quarter-hour values as the price input
+    for the scheduler and dashboard.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,6 +33,10 @@ from config import BASE_URL, DK_TZ, PRICE_REQUEST_TIMEOUT, VALID_PRICE_ZONES
 
 
 def _parse_target_date(target_date=None):
+    """
+    Converts the requested date input to a Danish local date.
+    """
+
     if target_date is None or str(target_date).strip() == "":
         return datetime.now(DK_TZ).date()
 
@@ -22,6 +50,10 @@ def _parse_target_date(target_date=None):
 
 
 def _first_present(record, keys):
+    """
+    Returns the first non-empty value from a list of possible API field names.
+    """
+
     for key in keys:
         value = record.get(key)
         if value is not None:
@@ -30,6 +62,10 @@ def _first_present(record, keys):
 
 
 def _expand_hourly_to_quarter_hourly(prices):
+    """
+    Expands 24 hourly price values to 96 quarter-hour values.
+    """
+
     expanded = []
 
     for price in prices:
@@ -39,6 +75,10 @@ def _expand_hourly_to_quarter_hourly(prices):
 
 
 def fetch_prices_for_date(zone="DK2", target_date=None):
+    """
+    Fetches and returns quarter-hour electricity prices for one date and price zone.
+    """
+
     zone = str(zone).upper()
 
     if zone not in VALID_PRICE_ZONES:
@@ -109,4 +149,8 @@ def fetch_prices_for_date(zone="DK2", target_date=None):
 
 
 def fetch_prices_for_today(zone="DK2"):
+    """
+    Fetches the price profile for the current Danish date.
+    """
+
     return fetch_prices_for_date(zone=zone, target_date=None)
