@@ -1,18 +1,37 @@
+/*
+  EMS Control App - Arduino safety and relay sketch
+
+  This sketch is the hardware-facing layer of the EMS demonstrator. The Python
+  application sends price, scenario, relay and load-trigger commands through
+  Arduino_RouterBridge. The sketch reads the INA226 sensors, applies the
+  measured calibration corrections, checks hardware safety limits and drives
+  the relay outputs that connect the grid, PV panel, battery, PEM/RFC and load.
+
+  The Arduino keeps the final hardware safety authority: a scenario request is
+  only accepted when the latest sensor readings are inside the defined voltage,
+  current and power limits.
+*/
+
+// Communication, I2C sensor and math libraries used by the EMS hardware layer.
 #include <Arduino_RouterBridge.h>
 #include <Wire.h>
 #include <INA226_WE.h>
 #include <math.h>
 
+// I2C addresses for the four INA226 sensors mounted in the demonstrator.
 #define ADDR_BAT  0x40
 #define ADDR_LOAD 0x41
 #define ADDR_PV   0x44
 #define ADDR_PEM  0x45
 
+// Dedicated sensor objects for the battery, load, PV panel and PEM/RFC branch.
 INA226_WE inaBat(&Wire, ADDR_BAT);
 INA226_WE inaLoad(&Wire, ADDR_LOAD);
 INA226_WE inaPV(&Wire, ADDR_PV);
 INA226_WE inaPEM(&Wire, ADDR_PEM);
 
+// Relay outputs. The scenario functions below define which relays are closed
+// for each EMS operating mode.
 const int K1 = 8;
 const int K2 = 2;
 const int K3 = 3;
@@ -21,8 +40,10 @@ const int K5 = 5;
 const int K6 = 7;
 const int K7 = 9;
 
+// Digital output used to start or stop the external variable-load sequence.
 const int LOAD_SEQUENCE_TRIGGER_PIN = 10;
 
+// Indicator LEDs showing which EMS scenario is currently active.
 const int LEDS1 = 12;
 const int LEDS2 = 0;
 const int LEDS3 = 11;
@@ -47,15 +68,19 @@ const float PEM_MAX_VOLTAGE = 2.20;
 const float MAX_CURRENT_A = 0.5;
 const float MAX_POWER_W = 0.5;
 
+// Sensor availability flags are set during setup and reported back to Python.
 bool inaBatOk = false;
 bool inaLoadOk = false;
 bool inaPVOk = false;
 bool inaPEMOk = false;
 
+// Latest price frame received from the Python EMS app.
 int priceSlot = 0;
 float electricityprice = 0.0;
 bool priceReceived = false;
 
+// Scenario state used to distinguish the requested scenario from the active
+// scenario that was actually accepted by the Arduino safety checks.
 int requestedScenario = 1;
 int activeScenario = 1;
 bool scenarioReceived = false;
@@ -63,22 +88,27 @@ bool scenarioAccepted = true;
 String lastRejectReason = "";
 String lastError = "";
 
+// Latest corrected voltage readings from the INA226 sensors.
 float nominalVoltage = 0.0;
 float panelVoltage = 0.0;
 float loadVoltage = 0.0;
 float pemrfcVoltage = 0.0;
 float batteryVoltage = 0.0;
 
+// Latest corrected current readings. Values are stored in ampere for safety
+// checks and converted to mA in the status payload when needed.
 float PVcurrent = 0.0;
 float Loadcurrent = 0.0;
 float PEMcurrent = 0.0;
 float Batcurrent = 0.0;
 
+// Raw shunt voltages are kept for debugging and app-side diagnostics.
 float PVshuntVoltage_mV = 0.0;
 float LoadshuntVoltage_mV = 0.0;
 float PEMshuntVoltage_mV = 0.0;
 float BatshuntVoltage_mV = 0.0;
 
+// Calculated branch powers based on the corrected voltage and current values.
 float PVpower = 0.0;
 float Loadpower = 0.0;
 float PEMpower = 0.0;
@@ -89,6 +119,8 @@ String mode = "S1 Grid -> Load";
 unsigned long lastPrint = 0;
 const unsigned long printInterval = 2000;
 
+// Function declarations keep the sketch readable in the Arduino IDE while the
+// implementation is grouped by purpose below.
 bool setupINA(INA226_WE &sensor, const char* name);
 float correctCurrent_A(byte address, float current_A);
 float correctVoltage_V(byte address, float voltage_V);
@@ -118,6 +150,8 @@ String get_status();
 
 void printValues();
 
+// Initialize bridge callbacks, I2C sensors, relay pins, trigger output and
+// scenario LEDs. The demonstrator starts in scenario 1 as a known safe state.
 void setup() {
   Monitor.begin();
   delay(1000);
@@ -159,6 +193,8 @@ void setup() {
   applyScenario(1);
 }
 
+// Main runtime loop. Measurements are refreshed frequently, while serial status
+// output is throttled so the monitor remains readable during operation.
 void loop() {
   readMeasurements();
 
@@ -170,6 +206,9 @@ void loop() {
   delay(400);
 }
 
+// Configure a single INA226 sensor for continuous averaged measurements.
+// Returning false allows the rest of the sketch to keep running if one sensor
+// is missing, while still reporting that fault to the Python app.
 bool setupINA(INA226_WE &sensor, const char* name) {
   Monitor.print("Initializing ");
   Monitor.print(name);
@@ -189,6 +228,8 @@ bool setupINA(INA226_WE &sensor, const char* name) {
   return true;
 }
 
+// Apply current calibration values found during sensor characterization.
+// Each INA226 channel has its own offset or gain correction.
 float correctCurrent_A(byte address, float current_A) {
   switch (address) {
     case ADDR_BAT:
@@ -208,6 +249,7 @@ float correctCurrent_A(byte address, float current_A) {
   }
 }
 
+// Apply voltage calibration offsets found during sensor characterization.
 float correctVoltage_V(byte address, float voltage_V) {
   switch (address) {
     case ADDR_BAT:
@@ -227,6 +269,8 @@ float correctVoltage_V(byte address, float voltage_V) {
   }
 }
 
+// Read every available INA226 sensor and update the shared measurement state.
+// These values are used both for the safety checks and for the app status view.
 void readMeasurements() {
   nominalVoltage = 5.0;
 
@@ -263,10 +307,15 @@ void readMeasurements() {
   }
 }
 
+// Control line for the separate variable-load Arduino. A HIGH value starts the
+// configured load profile and LOW stops it.
 void setLoadSequenceTrigger(bool active) {
   digitalWrite(LOAD_SEQUENCE_TRIGGER_PIN, active ? HIGH : LOW);
 }
 
+// Parse a price frame from Python: PRICE,<price_DKK_per_kWh>,<slot_index>.
+// The price is stored for monitoring and logging; relay decisions are handled
+// by the Python EMS controller before it sends a scenario request.
 bool apply_price_frame(String payload) {
   if (!payload.startsWith("PRICE,")) {
     lastError = "invalid price frame";
@@ -294,6 +343,9 @@ bool apply_price_frame(String payload) {
   return true;
 }
 
+// Parse and validate a scenario frame. The Python app can send either an
+// automatic EMS scenario or a manual scenario, but the Arduino performs the
+// same safety check before energizing any relay configuration.
 bool apply_scenario_frame(String payload) {
   if (!payload.startsWith("SCENARIO,") && !payload.startsWith("MANUAL_SCENARIO,")) {
     scenarioAccepted = false;
@@ -353,6 +405,9 @@ bool apply_scenario_frame(String payload) {
   return true;
 }
 
+// Manual relay command used for hardware testing and debugging. It bypasses the
+// scenario LED mapping because the relay state no longer represents one of the
+// six predefined EMS scenarios.
 bool apply_relay_frame(String payload) {
   if (!payload.startsWith("RELAY,")) {
     lastError = "invalid relay frame";
@@ -388,6 +443,8 @@ bool apply_relay_frame(String payload) {
   return true;
 }
 
+// Parse a load-trigger command from Python: LOAD_TRIGGER,0/1. This keeps the
+// variable load profile synchronized with the EMS app.
 bool apply_load_trigger_frame(String payload) {
   if (!payload.startsWith("LOAD_TRIGGER,")) {
     lastError = "invalid load trigger frame";
@@ -413,6 +470,8 @@ bool apply_load_trigger_frame(String payload) {
   return true;
 }
 
+// Final safety gate for scenario changes. The checks combine global branch
+// current/power limits with scenario-specific voltage and sensor requirements.
 bool scenarioIsSafe(int scenario) {
   lastRejectReason = "";
 
@@ -496,6 +555,8 @@ bool scenarioIsSafe(int scenario) {
   return true;
 }
 
+// Apply the accepted relay configuration for a scenario number. Unknown values
+// fall back to scenario 1 as the safe grid-to-load state.
 void applyScenario(int scenario) {
   if (scenario == 1) {
     scenario1();
@@ -514,6 +575,9 @@ void applyScenario(int scenario) {
   }
 }
 
+// Build the comma-separated status payload consumed by the Python EMS app.
+// The payload includes sensor availability, measurements, relay states, safety
+// limits, load-trigger state and the most recent accept/reject reason.
 String get_status() {
   // readMeasurements();
 
@@ -586,6 +650,8 @@ String get_status() {
   return payload;
 }
 
+// Compact serial monitor printout for live bench testing. The full data stream
+// is available through get_status(), so this line focuses on the key state.
 void printValues() {
   Monitor.print("Mode: ");
   Monitor.print(mode);
@@ -615,6 +681,7 @@ void printValues() {
   Monitor.println(lastError);
 }
 
+// Scenario 1: grid supplies the load. This is the default safe standby mode.
 void scenario1() {
   digitalWrite(K1, HIGH);
   digitalWrite(K2, LOW);
@@ -629,6 +696,7 @@ void scenario1() {
   setScenarioLEDs(1);
 }
 
+// Scenario 2: grid supplies the load while PV charges the battery.
 void scenario2() {
   digitalWrite(K1, HIGH);
   digitalWrite(K2, LOW);
@@ -643,6 +711,7 @@ void scenario2() {
   setScenarioLEDs(2);
 }
 
+// Scenario 3: grid supplies the load while PV powers the PEM/RFC branch.
 void scenario3() {
   digitalWrite(K1, HIGH);
   digitalWrite(K2, LOW);
@@ -657,6 +726,7 @@ void scenario3() {
   setScenarioLEDs(3);
 }
 
+// Scenario 4: PV supplies the load directly.
 void scenario4() {
   digitalWrite(K1, LOW);
   digitalWrite(K2, HIGH);
@@ -671,6 +741,7 @@ void scenario4() {
   setScenarioLEDs(4);
 }
 
+// Scenario 5: battery supplies the load.
 void scenario5() {
   digitalWrite(K1, LOW);
   digitalWrite(K2, LOW);
@@ -685,6 +756,7 @@ void scenario5() {
   setScenarioLEDs(5);
 }
 
+// Scenario 6: PEM/RFC branch supplies the load.
 void scenario6() {
   digitalWrite(K1, LOW);
   digitalWrite(K2, LOW);
@@ -699,6 +771,7 @@ void scenario6() {
   setScenarioLEDs(6);
 }
 
+// Update the scenario LEDs so only the active scenario indicator is lit.
 void setScenarioLEDs(int scenario) {
   digitalWrite(LEDS1, scenario == 1 ? HIGH : LOW);
   digitalWrite(LEDS2, scenario == 2 ? HIGH : LOW);
@@ -708,6 +781,7 @@ void setScenarioLEDs(int scenario) {
   digitalWrite(LEDS6, scenario == 6 ? HIGH : LOW);
 }
 
+// Clear all scenario LEDs, mainly used after manual relay commands.
 void allScenarioLEDsOff() {
   digitalWrite(LEDS1, LOW);
   digitalWrite(LEDS2, LOW);
@@ -717,6 +791,7 @@ void allScenarioLEDsOff() {
   digitalWrite(LEDS6, LOW);
 }
 
+// Convert a relay name from a manual command to the corresponding Arduino pin.
 int relayPinFromName(String relayName) {
   if (relayName == "K1") return K1;
   if (relayName == "K2") return K2;

@@ -1,3 +1,15 @@
+/*
+  ControllableLoad_V4.1_triggerAndData - triggered CSV load controller
+
+  Arduino UNO R4 sketch for the variable load used with the EMS setup. It reads
+  the scaled power profile from profile_csv.h, waits for a digital start signal
+  and then steps through the profile while the INA226 feedback loop regulates
+  the DAC-driven electronic load.
+
+  The digital trigger makes it possible for the EMS app Arduino to synchronize
+  demand-profile playback with scenario execution.
+*/
+
 #include <Wire.h>
 #include <INA226_WE.h>
 #include <math.h>
@@ -147,6 +159,7 @@ String faultMessage = "";
 // -------------------------
 // DAC helper functions
 // -------------------------
+// Clamp the requested DAC code to the allowed output range before writing A0.
 void setDACCode(int value) {
   if (value < 0) {
     value = 0;
@@ -160,6 +173,7 @@ void setDACCode(int value) {
   analogWrite(DAC_PIN, dacCode);
 }
 
+// Convert a 12-bit DAC code to the corresponding output voltage for logging.
 float dacVoltageFromCode(int code) {
   return (code / 4095.0f) * DAC_REF_V;
 }
@@ -167,10 +181,13 @@ float dacVoltageFromCode(int code) {
 // -------------------------
 // Profile helper functions
 // -------------------------
+// Convert a profile index to the original 15-minute time axis in hours.
 float profileTimeHours(int index) {
   return index * 0.25f;
 }
 
+// Reset playback to the first profile point and make that point the active
+// power target.
 void resetProfileState() {
   profileIndex = 0;
 
@@ -183,6 +200,7 @@ void resetProfileState() {
   lastProfileStepMs = millis();
 }
 
+// Stop the electronic load without discarding the current profile index.
 void stopLoadOnly() {
   loadEnabled = false;
   profileRunning = false;
@@ -191,11 +209,13 @@ void stopLoadOnly() {
   filterInitialized = false;
 }
 
+// Stop the load and return the profile to the first point.
 void stopAndResetProfile() {
   stopLoadOnly();
   resetProfileState();
 }
 
+// Latch a protection fault so the profile cannot continue until resetfault.
 void tripFault(const String &msg) {
   faultLatched = true;
   faultMessage = msg;
@@ -216,6 +236,7 @@ void clearFault() {
 // -------------------------
 // CSV parsing
 // -------------------------
+// Parse the generated CSV text from profile_csv.h into powerProfile_W.
 bool loadProfileFromCSV() {
   profileLength = 0;
 
@@ -360,6 +381,7 @@ void printProfilePoint() {
 // -------------------------
 // Startup DAC preload
 // -------------------------
+// Move the DAC near the useful MOSFET region before closed-loop control starts.
 void preloadDACForStartup() {
   if (!USE_DAC_START_PRELOAD) {
     return;
@@ -382,6 +404,7 @@ void preloadDACForStartup() {
 // -------------------------
 // Profile control
 // -------------------------
+// Start playback from the first point or resume from the current profile index.
 void startProfile(bool restartFromBeginning) {
   if (faultLatched) {
     Serial.println("Cannot start: fault is latched. Use resetfault first.");
@@ -416,17 +439,20 @@ void startProfile(bool restartFromBeginning) {
   printProfilePoint();
 }
 
+// Manual stop keeps the current profile position available for inspection.
 void stopProfileManual() {
   stopLoadOnly();
   Serial.println("Profile stopped. Load disabled.");
 }
 
+// Manual reset returns the load profile to the first CSV point.
 void resetProfileManual() {
   stopAndResetProfile();
   Serial.println("Profile stopped and reset to first point.");
   printProfilePoint();
 }
 
+// Advance to the next CSV profile point when the playback interval has elapsed.
 void updateProfile() {
   if (!profileRunning || !loadEnabled || faultLatched) {
     return;
@@ -457,6 +483,7 @@ void updateProfile() {
 // -------------------------
 // Digital input control
 // -------------------------
+// Detect rising/falling edges from the EMS Arduino trigger signal.
 void handleStartSignalInput() {
   bool currentStartSignalState = digitalRead(START_SIGNAL_PIN);
 
@@ -611,6 +638,7 @@ void handleSerial() {
 // -------------------------
 // Power-control helper
 // -------------------------
+// Adjust the DAC output toward the target power using relative error bands.
 void applyRelativePowerControl(float effectivePowerTarget) {
   float error_W = effectivePowerTarget - filteredPower_W;
   float absError_W = fabs(error_W);
@@ -758,6 +786,7 @@ void controlLoop() {
 // -------------------------
 // Setup
 // -------------------------
+// Initialize trigger input, CSV profile, DAC output and INA226 feedback.
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -826,6 +855,7 @@ void setup() {
 // -------------------------
 // Main loop
 // -------------------------
+// Poll serial/trigger input, update the profile, run control and print status.
 void loop() {
   handleSerial();
   handleStartSignalInput();
