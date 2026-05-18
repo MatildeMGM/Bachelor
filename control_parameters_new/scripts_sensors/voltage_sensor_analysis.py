@@ -1,3 +1,27 @@
+"""
+File: voltage_sensor_analysis.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script analyses the voltage sensor measurements used in the EMS
+    setup. It compares reference measurements with INA sensor readings,
+    calculates absolute errors, and generates plots for the proposed voltage
+    correction offsets.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +29,10 @@ import matplotlib.pyplot as plt
 
 
 def find_bachelor_dir():
+    """
+    Locates the repository root by searching for the expected project folders.
+    """
+
     script_dir = Path(__file__).resolve().parent
 
     for parent in [script_dir] + list(script_dir.parents):
@@ -34,6 +62,7 @@ plt.style.use("seaborn-v0_8-whitegrid")
 loads = ["0", "220", "2×220", "3×220", "4×220"]
 x = np.arange(len(loads))
 
+# multimeter readings and averaged INA readings for each sensor and load configuration
 data = {
     "Sensor 40": {
         "V_ref": np.array([3.302, 3.291, 3.280, 3.269, 3.117]),
@@ -55,6 +84,10 @@ data = {
 
 
 def plot_voltage_abs_error():
+    """
+    Plots the absolute voltage error for each sensor and load configuration.
+    """
+
     colors = [
         "#6B8FBF",
         "#7FB77E",
@@ -98,6 +131,10 @@ def plot_voltage_abs_error():
 
 
 def plot_voltage_correction():
+    """
+    Plots the raw and offset-corrected voltage errors for each sensor.
+    """
+
     fig, axes = plt.subplots(
         2, 2,
         figsize=(13, 9),
@@ -184,6 +221,10 @@ def plot_voltage_correction():
 
 
 def main():
+    """
+    Generates and saves the voltage sensor analysis plots.
+    """
+
     plot_voltage_abs_error()
     plot_voltage_correction()
 

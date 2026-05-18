@@ -1,3 +1,27 @@
+"""
+File: current_sensor_analysis.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script analyses current sensor measurements used in the EMS setup.
+    It compares reference current measurements with INA sensor readings,
+    evaluates absolute errors, and generates plots for the current correction
+    parameters.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +29,10 @@ import matplotlib.pyplot as plt
 
 
 def find_bachelor_dir():
+    """
+    Locates the repository root by searching for the expected project folders.
+    """
+
     script_dir = Path(__file__).resolve().parent
 
     for parent in [script_dir] + list(script_dir.parents):
@@ -35,6 +63,7 @@ plt.rcParams.update({
 loads = ["0", "220", "2×220", "3×220", "4×220"]
 x = np.arange(len(loads))
 
+# multimeter readings and averaged INA readings for each sensor and load configuration
 data = {
     "Sensor 40": {
         "I_ref": np.array([0.000, 14.870, 29.050, 42.900, 55.100]),
@@ -56,6 +85,10 @@ data = {
 
 
 def plot_current_correction():
+    """
+    Plots the raw and corrected current measurement errors for each sensor.
+    """
+
     fig, axes = plt.subplots(2, 2, figsize=(12, 9), sharex=True, sharey=True)
     axes = axes.flatten()
 
@@ -115,6 +148,10 @@ def plot_current_correction():
 
 
 def plot_current_abs_error():
+    """
+    Plots the absolute current error for each sensor and load configuration.
+    """
+
     colors = [
         "#6B8FBF",
         "#7FB77E",
@@ -158,6 +195,10 @@ def plot_current_abs_error():
 
 
 def main():
+    """
+    Generates and saves the current sensor analysis plots.
+    """
+
     plot_current_correction()
     plot_current_abs_error()
 

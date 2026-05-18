@@ -1,9 +1,33 @@
+"""
+File: demand_profile_may.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script loads the 15-minute demand profile used by the EMS control
+    application. The profile is stored as a scaled CSV file and is converted
+    to the configured EMS demand limits before it is used by the scheduler.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 import sys
 
+# Allows this data module to import the shared EMS limits when run directly.
 PYTHON_DIR = Path(__file__).resolve().parents[2]
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
@@ -18,6 +42,10 @@ CSV_FIELDS = ["time_slot", "time_of_day", "power_mW"]
 
 
 def scale_values(values, new_min, new_max):
+    """
+    Scales a list of numeric values linearly to a new minimum and maximum range.
+    """
+
     old_min = min(values)
     old_max = max(values)
 
@@ -34,6 +62,10 @@ def scale_values(values, new_min, new_max):
 
 
 def read_demand_rows():
+    """
+    Reads the scaled demand CSV file and returns each row as a dictionary.
+    """
+
     if not DEMAND_FILE.exists():
         return []
 
@@ -49,6 +81,14 @@ def read_demand_rows():
 
 
 def load_demand_profile():
+    """
+    Loads the 96-step demand profile used by the EMS scheduler.
+
+    Invalid values are skipped, short profiles are extended with the last
+    available value, and the final profile is scaled to the demand limits
+    defined in ems_limits.py.
+    """
+
     rows = read_demand_rows()
 
     if not rows:
@@ -80,6 +120,13 @@ def load_demand_profile():
 
 
 def write_scaled_demand_profile():
+    """
+    Rewrites the demand CSV file after scaling the current values to EMS limits.
+
+    This helper is used when the file is executed directly, for example after
+    updating the demand CSV values.
+    """
+
     rows = read_demand_rows()
 
     if not rows:

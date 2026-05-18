@@ -1,5 +1,26 @@
-# This file creates a typical May load profile with 96 values.
-# The output matches 15 minute electricity price data.
+"""
+File: demand_profile_may.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script creates a representative May demand profile from Danish
+    electricity consumption CSV files. The resulting load profile is
+    interpolated to 15-minute intervals and scaled to the power range used
+    by the EMS application.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
 
 from pathlib import Path
 
@@ -8,6 +29,8 @@ import matplotlib.pyplot as plt
 
 
 SCRIPT_DIR = Path(__file__).parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
+APP_DEMAND_DIR = PROJECT_ROOT / "EMS Control App" / "python" / "data" / "variable_load_signal"
 
 INPUT_FILES = [
     SCRIPT_DIR / "maj2024.csv",
@@ -16,11 +39,11 @@ INPUT_FILES = [
 
 OUTPUT_FILE = SCRIPT_DIR / "typical_may_load_profile_15min.csv"
 
-# threshholds for scaling the load profile to a realistic range for the EMS
+# Thresholds for scaling the load profile to a realistic range for the EMS
 MIN_POWER_MW = 15
 MAX_POWER_MW = 75
 
-SCALED_OUTPUT_FILE = SCRIPT_DIR / "scaled_may_power_profile_15min.csv"
+SCALED_OUTPUT_FILE = APP_DEMAND_DIR / "scaled_may_power_profile_15min.csv"
 SCALED_PLOT_FILE = SCRIPT_DIR / "scaled_may_power_profile_15min.png"
 
 TIME_COLUMN = "TimeDK"
@@ -28,6 +51,10 @@ LOAD_COLUMN = "ConsumptionkWh"
 
 
 def read_load_file(file_name):
+    """
+    Reads one hourly consumption CSV file and returns the timestamp and load columns.
+    """
+
     file_path = Path(file_name)
 
     if not file_path.exists():
@@ -48,6 +75,10 @@ def read_load_file(file_name):
 
 
 def create_hourly_typical_profile(data):
+    """
+    Calculates the average May consumption for each hour of the day.
+    """
+
     data = data.copy()
     data["hour"] = data[TIME_COLUMN].dt.hour
 
@@ -67,6 +98,10 @@ def create_hourly_typical_profile(data):
 
 
 def interpolate_to_15min(hourly_profile):
+    """
+    Interpolates the 24 hourly load values to 96 quarter-hour values.
+    """
+
     hourly_time_index = pd.date_range(
         "2024-01-01 00:00",
         periods=24,
@@ -111,6 +146,10 @@ def interpolate_to_15min(hourly_profile):
 
 
 def create_typical_may_load_profile():
+    """
+    Combines the input CSV files into a typical 15-minute May load profile.
+    """
+
     all_data = []
 
     for file_name in INPUT_FILES:
@@ -133,12 +172,20 @@ def create_typical_may_load_profile():
 
 
 def get_load_values_for_ems():
+    """
+    Returns the unscaled 15-minute load values as a list for EMS-related analysis.
+    """
+
     load_profile = create_typical_may_load_profile()
 
     return load_profile["load_kWh_per_15min"].tolist()
 
 
 def plot_load_profile(load_profile):
+    """
+    Plots and saves the unscaled 15-minute May load profile.
+    """
+
     plot_file = SCRIPT_DIR / "typical_may_load_profile_15min.png"
 
     plt.figure(figsize=(10, 5))
@@ -159,6 +206,10 @@ def plot_load_profile(load_profile):
 
 
 def scale_load_to_power(load_profile):
+    """
+    Scales the 15-minute load profile to the configured EMS demand power range.
+    """
+
     scaled = load_profile.copy()
 
     load_min = scaled["load_kWh_per_15min"].min()
@@ -186,6 +237,10 @@ def scale_load_to_power(load_profile):
 
 
 def plot_scaled_power_profile(scaled_profile):
+    """
+    Plots and saves the scaled demand power profile.
+    """
+
     plt.figure(figsize=(10, 5))
     plt.plot(
         scaled_profile["time_of_day"],
@@ -205,6 +260,10 @@ def plot_scaled_power_profile(scaled_profile):
 
 
 def main():
+    """
+    Generates the load profile, writes the scaled CSV file, and saves plots.
+    """
+
     load_profile = create_typical_may_load_profile()
     scaled_profile = scale_load_to_power(load_profile)
 

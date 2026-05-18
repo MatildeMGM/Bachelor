@@ -1,3 +1,26 @@
+"""
+File: regression.py
+
+Description:
+    This script is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
+
+    This script performs a linear regression of the current measurement error
+    for sensor 45. The result is used to evaluate whether a linear correction
+    model is suitable for the sensor calibration.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
+"""
+
 import numpy as np
 
 # Sensor 45 current data
