@@ -31,7 +31,7 @@ Two archives are intended for submission with the thesis:
 
 Generated or local development folders such as `.git/`, `.venv/`, and `__pycache__/` are not part of the intended archival content.
 
-## Responsible Use of AI
+## Declaration of Use of Artificial Intelligence (AI)
 
 Generative AI-assisted tools were used during parts of the project as support for programming, code structuring, data extraction, file conversion, debugging, documentation structure, grammar correction, language refinement, and checking text coherence.
 
