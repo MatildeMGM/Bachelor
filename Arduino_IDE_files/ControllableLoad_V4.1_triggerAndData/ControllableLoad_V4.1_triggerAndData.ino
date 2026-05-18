@@ -1,13 +1,25 @@
 /*
-  ControllableLoad_V4.1_triggerAndData - triggered CSV load controller
+File: ControllableLoad_V4.1_triggerAndData.ino
 
-  Arduino UNO R4 sketch for the variable load used with the EMS setup. It reads
-  the scaled power profile from profile_csv.h, waits for a digital start signal
-  and then steps through the profile while the INA226 feedback loop regulates
-  the DAC-driven electronic load.
+Description:
+    This sketch is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
 
-  The digital trigger makes it possible for the EMS app Arduino to synchronize
-  demand-profile playback with scenario execution.
+    Arduino UNO R4 sketch for the variable load used with the EMS setup. It
+    reads the scaled power profile from profile_csv.h, waits for a digital start
+    signal and then steps through the profile while the INA226 feedback loop
+    regulates the DAC-driven electronic load.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
 */
 
 #include <Wire.h>
@@ -21,9 +33,7 @@
 
 INA226_WE ina226(&Wire, INA226_ADDRESS);
 
-// -------------------------
 // Digital start signal
-// -------------------------
 const int START_SIGNAL_PIN = 2;      // Digital input pin on UNO R4
 const bool START_SIGNAL_ACTIVE = HIGH;
 
@@ -33,30 +43,22 @@ const int START_SIGNAL_PIN_MODE = INPUT;
 
 bool previousStartSignalState = LOW;
 
-// -------------------------
 // DAC settings
-// -------------------------
 const int DAC_PIN = A0;              // UNO R4 WiFi DAC pin
 const float DAC_REF_V = 5.0f;
 const float DAC_MAX_V = 5.0f;
 const int DAC_MAX_CODE = (int)((DAC_MAX_V / DAC_REF_V) * 4095.0f + 0.5f);
 
-// -------------------------
 // Startup DAC behavior
-// -------------------------
 int DAC_START_CODE = 1450;
 bool USE_DAC_START_PRELOAD = true;
 
 const float START_PRELOAD_MIN_POWER_W = 0.005f;
 
-// -------------------------
 // INA correction
-// -------------------------
 const float INA_CORRECTION_FACTOR = 0.856f;
 
-// -------------------------
 // CSV profile settings
-// -------------------------
 const int MAX_PROFILE_POINTS = 192;
 
 float powerProfile_W[MAX_PROFILE_POINTS];
@@ -65,9 +67,7 @@ int profileLength = 0;
 const unsigned long PROFILE_STEP_INTERVAL_MS = 15000;
 const bool CSV_POWER_IS_MW = true;
 
-// -------------------------
 // Time-series state
-// -------------------------
 bool loadEnabled = false;
 bool profileRunning = false;
 bool repeatProfile = false;
@@ -75,9 +75,7 @@ bool repeatProfile = false;
 int profileIndex = 0;
 unsigned long lastProfileStepMs = 0;
 
-// -------------------------
 // User limits
-// -------------------------
 float I_MAX_A = 0.80f;
 float P_MAX_W = 3.00f;
 
@@ -86,9 +84,7 @@ float BUS_MIN_V = 0.10f;
 
 float setPower_W = 0.0f;
 
-// -------------------------
 // Control behavior
-// -------------------------
 int dacCode = 0;
 
 unsigned long controlIntervalMs = 40;
@@ -112,9 +108,7 @@ const int STEP_POWER_FAR = 12;
 const int STEP_POWER_MEDIUM = 6;
 const int STEP_POWER_NEAR = 3;
 
-// -------------------------
 // Filter / damping
-// -------------------------
 float filteredCurrent_A = 0.0f;
 float filteredPower_W = 0.0f;
 bool filterInitialized = false;
@@ -123,25 +117,19 @@ const float CURRENT_FILTER_ALPHA = 0.18f;
 const float POWER_FILTER_ALPHA = 0.18f;
 const float POWER_DEADBAND_W = 0.005f;
 
-// -------------------------
 // Limits and protection
-// -------------------------
 const float SOFT_LIMIT_FRAC = 0.92f;
 
 const float CURRENT_FAULT_MARGIN_A = 0.08f;
 const float POWER_FAULT_MARGIN_W = 0.20f;
 
-// -------------------------
 // Weak source collapse detection
-// -------------------------
 float healthyBusVoltage_V = 0.0f;
 
 const float COLLAPSE_FRAC = 0.85f;
 const int COLLAPSE_BACKOFF = 50;
 
-// -------------------------
 // Measurements
-// -------------------------
 float shuntVoltage_mV = 0.0f;
 float busVoltage_V = 0.0f;
 float current_mA = 0.0f;
@@ -150,15 +138,11 @@ float power_mW = 0.0f;
 float current_A = 0.0f;
 float power_W = 0.0f;
 
-// -------------------------
 // Fault latch
-// -------------------------
 bool faultLatched = false;
 String faultMessage = "";
 
-// -------------------------
 // DAC helper functions
-// -------------------------
 // Clamp the requested DAC code to the allowed output range before writing A0.
 void setDACCode(int value) {
   if (value < 0) {
@@ -178,9 +162,7 @@ float dacVoltageFromCode(int code) {
   return (code / 4095.0f) * DAC_REF_V;
 }
 
-// -------------------------
 // Profile helper functions
-// -------------------------
 // Convert a profile index to the original 15-minute time axis in hours.
 float profileTimeHours(int index) {
   return index * 0.25f;
@@ -233,9 +215,7 @@ void clearFault() {
   Serial.println("Fault cleared. Load stopped and profile reset.");
 }
 
-// -------------------------
 // CSV parsing
-// -------------------------
 // Parse the generated CSV text from profile_csv.h into powerProfile_W.
 bool loadProfileFromCSV() {
   profileLength = 0;
@@ -317,9 +297,7 @@ bool loadProfileFromCSV() {
   return true;
 }
 
-// -------------------------
 // INA226 measurements
-// -------------------------
 void readINA226() {
   shuntVoltage_mV = ina226.getShuntVoltage_mV();
   busVoltage_V = ina226.getBusVoltage_V();
@@ -360,9 +338,7 @@ void readINA226() {
   }
 }
 
-// -------------------------
 // Profile printing
-// -------------------------
 void printProfilePoint() {
   Serial.print("Profile step ");
   Serial.print(profileIndex + 1);
@@ -378,9 +354,7 @@ void printProfilePoint() {
   Serial.println(" W");
 }
 
-// -------------------------
 // Startup DAC preload
-// -------------------------
 // Move the DAC near the useful MOSFET region before closed-loop control starts.
 void preloadDACForStartup() {
   if (!USE_DAC_START_PRELOAD) {
@@ -401,9 +375,7 @@ void preloadDACForStartup() {
   Serial.println(" V");
 }
 
-// -------------------------
 // Profile control
-// -------------------------
 // Start playback from the first point or resume from the current profile index.
 void startProfile(bool restartFromBeginning) {
   if (faultLatched) {
@@ -480,9 +452,7 @@ void updateProfile() {
   }
 }
 
-// -------------------------
 // Digital input control
-// -------------------------
 // Detect rising/falling edges from the EMS Arduino trigger signal.
 void handleStartSignalInput() {
   bool currentStartSignalState = digitalRead(START_SIGNAL_PIN);
@@ -503,9 +473,7 @@ void handleStartSignalInput() {
   previousStartSignalState = currentStartSignalState;
 }
 
-// -------------------------
 // Serial output
-// -------------------------
 void printStatus() {
   Serial.print("State=");
 
@@ -584,9 +552,7 @@ void printHelp() {
   Serial.println();
 }
 
-// -------------------------
 // Serial command handling
-// -------------------------
 void handleSerial() {
   if (!Serial.available()) {
     return;
@@ -635,9 +601,7 @@ void handleSerial() {
   Serial.println("Unknown command. Type 'help'.");
 }
 
-// -------------------------
 // Power-control helper
-// -------------------------
 // Adjust the DAC output toward the target power using relative error bands.
 void applyRelativePowerControl(float effectivePowerTarget) {
   float error_W = effectivePowerTarget - filteredPower_W;
@@ -688,9 +652,7 @@ void applyRelativePowerControl(float effectivePowerTarget) {
   }
 }
 
-// -------------------------
 // Main control loop
-// -------------------------
 void controlLoop() {
   readINA226();
 
@@ -783,9 +745,7 @@ void controlLoop() {
   applyRelativePowerControl(effectivePowerTarget);
 }
 
-// -------------------------
 // Setup
-// -------------------------
 // Initialize trigger input, CSV profile, DAC output and INA226 feedback.
 void setup() {
   Serial.begin(115200);
@@ -852,9 +812,7 @@ void setup() {
   }
 }
 
-// -------------------------
 // Main loop
-// -------------------------
 // Poll serial/trigger input, update the profile, run control and print status.
 void loop() {
   handleSerial();

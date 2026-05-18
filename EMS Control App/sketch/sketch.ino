@@ -1,15 +1,27 @@
 /*
-  EMS Control App - Arduino safety and relay sketch
+File: sketch.ino
 
-  This sketch is the hardware-facing layer of the EMS demonstrator. The Python
-  application sends price, scenario, relay and load-trigger commands through
-  Arduino_RouterBridge. The sketch reads the INA226 sensors, applies the
-  measured calibration corrections, checks hardware safety limits and drives
-  the relay outputs that connect the grid, PV panel, battery, PEM/RFC and load.
+Description:
+    This sketch is part of the bachelor project:
+    "Investigation of reversible electrolyzers and implementation of energy
+    management control strategies through IoT embedded microcontroller".
 
-  The Arduino keeps the final hardware safety authority: a scenario request is
-  only accepted when the latest sensor readings are inside the defined voltage,
-  current and power limits.
+    This sketch is the hardware-facing layer of the EMS demonstrator. The
+    Python application sends price, scenario, relay and load-trigger commands
+    through Arduino_RouterBridge. The sketch reads the INA226 sensors, applies
+    the measured calibration corrections, checks hardware safety limits and
+    drives the relay outputs that connect the grid, PV panel, battery, PEM/RFC
+    and load.
+
+Authors:
+    Jacob Norman Sorensen
+    Matilde Marie Gronkjaer Matell
+
+Institution:
+    Technical University of Denmark (DTU)
+
+Date:
+    2026-05-18
 */
 
 // Communication, I2C sensor and math libraries used by the EMS hardware layer.
